@@ -44,6 +44,8 @@ npm install
 npm run build
 ```
 
+**Note:** The generated TypeScript types are created automatically during `npm install` (via `postinstall` hook) or manually with `npm run codegen`. Always use `npm run build` instead of running `tsc` directly.
+
 ## Quick Start
 
 ### 1. Initialize SDK
