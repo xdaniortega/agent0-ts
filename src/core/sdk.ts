@@ -11,6 +11,12 @@ import type {
   SearchResultMeta,
   RegistrationFile,
   Endpoint,
+  FeedbackFileInput,
+  SearchOptions,
+  ReputationSearchFilters,
+  ReputationSearchOptions,
+  FeedbackSearchFilters,
+  FeedbackSearchOptions,
 } from '../models/interfaces.js';
 import type { AgentRegistrationFile as SubgraphRegistrationFile } from '../models/generated/subgraph-types.js';
 import type { AgentId, ChainId, Address, URI } from '../models/types.js';
@@ -279,11 +285,11 @@ export class SDK {
       throw new Error(`Agent ${agentId} is not on current chain ${currentChainId}`);
     }
 
-    // Get token URI from contract
-    let tokenUri: string;
+    // Get agent URI from contract
+    let agentURI: string;
     try {
       const identityRegistry = this.getIdentityRegistry();
-      tokenUri = await this._web3Client.callContract(identityRegistry, 'tokenURI', BigInt(tokenId));
+      agentURI = await this._web3Client.callContract(identityRegistry, 'tokenURI', BigInt(tokenId));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to load agent ${agentId}: ${errorMessage}`);
@@ -291,15 +297,15 @@ export class SDK {
 
     // Load registration file - handle empty URI (agent registered without URI yet)
     let registrationFile: RegistrationFile;
-    if (!tokenUri || tokenUri === '') {
+    if (!agentURI || agentURI === '') {
       // Agent registered but no URI set yet - create empty registration file
       registrationFile = this._createEmptyRegistrationFile();
     } else {
-      registrationFile = await this._loadRegistrationFile(tokenUri);
+      registrationFile = await this._loadRegistrationFile(agentURI);
     }
     
     registrationFile.agentId = agentId;
-    registrationFile.agentURI = tokenUri || undefined;
+    registrationFile.agentURI = agentURI || undefined;
 
     return new Agent(this, registrationFile);
   }
@@ -344,13 +350,13 @@ export class SDK {
    * Supports multi-chain search when chains parameter is provided
    */
   async searchAgents(
-    params?: SearchParams,
-    sort?: string[],
-    pageSize: number = 50,
-    cursor?: string
+    filters: SearchParams = {},
+    options: SearchOptions = {}
   ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta?: SearchResultMeta }> {
-    const searchParams: SearchParams = params || {};
-    return this._indexer.searchAgents(searchParams, pageSize, cursor, sort || []);
+    const pageSize = options.pageSize ?? 50;
+    const cursor = options.cursor;
+    const sort = options.sort ?? [];
+    return this._indexer.searchAgents(filters, pageSize, cursor, sort);
   }
 
   /**
@@ -358,44 +364,34 @@ export class SDK {
    * Supports multi-chain search when chains parameter is provided
    */
   async searchAgentsByReputation(
-    agents?: AgentId[],
-    tags?: string[],
-    reviewers?: Address[],
-    capabilities?: string[],
-    skills?: string[],
-    tasks?: string[],
-    names?: string[],
-    minAverageScore?: number,
-    includeRevoked: boolean = false,
-    pageSize: number = 50,
-    cursor?: string,
-    sort?: string[],
-    chains?: ChainId[] | 'all'
+    filters: ReputationSearchFilters = {},
+    options: ReputationSearchOptions = {}
   ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta?: SearchResultMeta }> {
     // Parse cursor to skip value
     let skip = 0;
-    if (cursor) {
+    if (options.cursor) {
       try {
-        skip = parseInt(cursor, 10);
+        skip = parseInt(options.cursor, 10);
       } catch {
         skip = 0;
       }
     }
 
     // Default sort
-    if (!sort) {
-      sort = ['createdAt:desc'];
-    }
+    const sort = options.sort ?? ['createdAt:desc'];
+    const pageSize = options.pageSize ?? 50;
+    const includeRevoked = options.includeRevoked ?? false;
+    const chains = options.chains;
 
     return this._indexer.searchAgentsByReputation(
-      agents,
-      tags,
-      reviewers,
-      capabilities,
-      skills,
-      tasks,
-      names,
-      minAverageScore,
+      filters.agents,
+      filters.tags,
+      filters.reviewers,
+      filters.capabilities,
+      filters.skills,
+      filters.tasks,
+      filters.names,
+      filters.minAverageScore,
       includeRevoked,
       pageSize,
       skip,
@@ -439,50 +435,12 @@ export class SDK {
   // Feedback methods
 
   /**
-   * Sign feedback authorization for a client
+   * Prepare an off-chain feedback file.
+   *
+   * This does NOT include on-chain fields like score/tag1/tag2/endpoint.
    */
-  async signFeedbackAuth(
-    agentId: AgentId,
-    clientAddress: Address,
-    indexLimit?: number,
-    expiryHours: number = 24
-  ): Promise<string> {
-    // Update feedback manager with registries
-    this._feedbackManager.setReputationRegistry(this.getReputationRegistry());
-    this._feedbackManager.setIdentityRegistry(this.getIdentityRegistry());
-
-    return this._feedbackManager.signFeedbackAuth(agentId, clientAddress, indexLimit, expiryHours);
-  }
-
-  /**
-   * Prepare feedback file
-   */
-  prepareFeedback(
-    agentId: AgentId,
-    score?: number,
-    tags?: string[],
-    text?: string,
-    capability?: string,
-    name?: string,
-    skill?: string,
-    task?: string,
-    context?: Record<string, unknown>,
-    proofOfPayment?: Record<string, unknown>,
-    extra?: Record<string, unknown>
-  ): Record<string, unknown> {
-    return this._feedbackManager.prepareFeedback(
-      agentId,
-      score,
-      tags,
-      text,
-      capability,
-      name,
-      skill,
-      task,
-      context,
-      proofOfPayment,
-      extra
-    );
+  prepareFeedbackFile(input: FeedbackFileInput, extra?: Record<string, unknown>): FeedbackFileInput {
+    return this._feedbackManager.prepareFeedbackFile(input, extra);
   }
 
   /**
@@ -490,14 +448,17 @@ export class SDK {
    */
   async giveFeedback(
     agentId: AgentId,
-    feedbackFile: Record<string, unknown>,
-    feedbackAuth?: string
+    score: number,
+    tag1?: string,
+    tag2?: string,
+    endpoint?: string,
+    feedbackFile?: FeedbackFileInput
   ): Promise<Feedback> {
     // Update feedback manager with registries
     this._feedbackManager.setReputationRegistry(this.getReputationRegistry());
     this._feedbackManager.setIdentityRegistry(this.getIdentityRegistry());
 
-    return this._feedbackManager.giveFeedback(agentId, feedbackFile, undefined, feedbackAuth);
+    return this._feedbackManager.giveFeedback(agentId, score, tag1, tag2, endpoint, feedbackFile);
   }
 
   /**
@@ -511,20 +472,20 @@ export class SDK {
    * Search feedback
    */
   async searchFeedback(
-    agentId: AgentId,
-    tags?: string[],
-    capabilities?: string[],
-    skills?: string[],
-    minScore?: number,
-    maxScore?: number
+    filters: FeedbackSearchFilters,
+    options: FeedbackSearchOptions = {}
   ): Promise<Feedback[]> {
     const params: SearchFeedbackParams = {
-      agents: [agentId],
-      tags,
-      capabilities,
-      skills,
-      minScore,
-      maxScore,
+      agents: [filters.agentId],
+      tags: filters.tags,
+      reviewers: filters.reviewers,
+      capabilities: filters.capabilities,
+      skills: filters.skills,
+      tasks: filters.tasks,
+      names: filters.names,
+      includeRevoked: filters.includeRevoked,
+      minScore: options.minScore,
+      maxScore: options.maxScore,
     };
     return this._feedbackManager.searchFeedback(params);
   }
