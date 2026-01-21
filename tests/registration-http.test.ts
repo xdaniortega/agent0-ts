@@ -166,7 +166,7 @@ describeMaybe('Agent Registration with HTTP URI', () => {
     const secondWalletAddress = privateKeyToAccount(
       (CLIENT_PRIVATE_KEY.startsWith('0x') ? CLIENT_PRIVATE_KEY : `0x${CLIENT_PRIVATE_KEY}`) as any
     ).address;
-    await agent.setAgentWallet(secondWalletAddress, { newWalletPrivateKey: CLIENT_PRIVATE_KEY });
+    await agent.setWallet(secondWalletAddress, { newWalletPrivateKey: CLIENT_PRIVATE_KEY });
   });
 });
 

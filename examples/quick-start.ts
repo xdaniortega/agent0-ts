@@ -76,7 +76,7 @@ async function main() {
   //
   // Example (two-wallet flow):
   // const newWallet = '0x...';
-  // await agent.setAgentWallet(newWallet, { newWalletSigner: process.env.NEW_WALLET_PRIVATE_KEY });
+  // await agent.setWallet(newWallet, { newWalletPrivateKey: process.env.NEW_WALLET_PRIVATE_KEY });
 }
 
 main().catch(console.error);

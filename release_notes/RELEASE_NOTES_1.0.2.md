@@ -23,8 +23,8 @@ This release is a **major refactor** to align the TypeScript SDK with the **upda
 - **Agent URI naming**
   - On-chain “token URI” naming is now **`agentURI`** across SDK logic and examples.
 
-- **Agent wallet management (`setAgentWallet`)**
-  - `Agent.setAgentWallet(...)` is now **on-chain only** and **signature-gated** (EIP-712 + ERC-1271 compatible), aligned with the Python SDK UX.
+- **Agent wallet management (`setWallet`)**
+  - `Agent.setWallet(...)` is **on-chain only** and **signature-gated** (EIP-712 + ERC-1271 compatible), aligned with the Python SDK UX.
   - Calling it on an unregistered agent now **throws**.
 
 - **Feedback flow updated (ERC-8004 Jan 2026)**
@@ -51,14 +51,14 @@ const agents = await sdk.searchAgents(
 
 // Reputation-based agent search (filters + paging/sort/chains)
 const topRated = await sdk.searchAgentsByReputation(
-  { tags: ['enterprise'], minAverageScore: 90 },
+  { tags: ['enterprise'], minAverageValue: 90 },
   { pageSize: 20, chains: [11155111], includeRevoked: false }
 );
 
-// Feedback search for a single agent (filters + score-range options)
+// Feedback search for a single agent (filters + value-range options)
 const feedback = await sdk.searchFeedback(
   { agentId: '11155111:123', tags: ['data_analyst'], capabilities: ['tools'] },
-  { minScore: 80, maxScore: 100 }
+  { minValue: 80, maxValue: 100 }
 );
 ```
 
@@ -67,7 +67,7 @@ const feedback = await sdk.searchFeedback(
 - Positional signatures like:
   - `searchAgents(params?, sort?, pageSize?, cursor?)`
   - `searchAgentsByReputation(agents?, tags?, reviewers?, ... many more ...)`
-  - `searchFeedback(agentId, tags?, capabilities?, skills?, minScore?, maxScore?)`
+- `searchFeedback(agentId, tags?, capabilities?, skills?, minValue?, maxValue?)`
 
 ### Feedback API (public)
 
@@ -113,7 +113,7 @@ const feedbackFile = sdk.prepareFeedbackFile({
 
 ### Identity Registry
 - `tokenURI` naming aligned to **`agentURI`**.
-- Added/updated `setAgentWallet(...)` and `getAgentWallet(...)` support.
+- Added/updated agent wallet support.
 
 ### Reputation Registry
 - `feedbackAuth` removed from `giveFeedback(...)`.
@@ -154,7 +154,7 @@ const feedbackFile = sdk.prepareFeedbackFile({
 3. **Update `tokenURI` references**
    - Replace any usage with `agentURI`.
 
-4. **Update `setAgentWallet` usage**
+4. **Update wallet usage**
    - Ensure the agent is registered first.
    - Use the new signature-gated on-chain flow.
 

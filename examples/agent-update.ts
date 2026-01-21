@@ -74,13 +74,13 @@ async function main() {
   // Update endpoints if needed
   await loaded.setMCP('https://api.example.com/mcp-updated', '2025-06-18');
 
-  // Optional: setAgentWallet is on-chain only and signature-gated in ERC-8004 Jan 2026.
+  // Optional: setWallet is on-chain only and signature-gated in ERC-8004 Jan 2026.
   // Leaving it out here keeps the example focused on "update + re-register".
   // If you want to try it (one-wallet flow), uncomment:
   //
   // const newWalletAddress = (await sdk.chainClient.getAddress())!;
   // console.log('Setting agent wallet on-chain...');
-  // const walletTxHash = await loaded.setAgentWallet(newWalletAddress);
+  // const walletTxHash = await loaded.setWallet(newWalletAddress);
   // console.log(`Agent wallet updated. Transaction: ${walletTxHash || '(skipped - already set)'}`);
 
   // 4) Re-register with updated information

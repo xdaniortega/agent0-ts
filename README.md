@@ -118,7 +118,7 @@ agent.addDomain('technology/data_science/data_science', true);
 
 // Optionally set a dedicated agent wallet on-chain (requires new wallet signature).
 // If you want agentWallet = owner wallet, you can skip this (contract sets initial value to owner).
-// await agent.setAgentWallet('0x...', { newWalletPrivateKey: process.env.NEW_WALLET_PRIVATE_KEY });
+// await agent.setWallet('0x...', { newWalletPrivateKey: process.env.NEW_WALLET_PRIVATE_KEY });
 agent.setTrust(true, true, false); // reputation, cryptoEconomic, teeAttestation
 
 // Add metadata and set status

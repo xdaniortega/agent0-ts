@@ -382,12 +382,12 @@ export class Agent {
   }
 
   /**
-   * Set agent wallet on-chain with EIP-712 signature verification (ERC-8004 Jan 2026).
+   * Set agent wallet on-chain with EIP-712 signature verification.
    *
-   * This is a clean breaking API: it is on-chain only.
+   * This is on-chain only.
    * If the agent is not registered yet, this throws.
    */
-  async setAgentWallet(
+  async setWallet(
     newWallet: Address,
     opts?: {
       deadline?: number;
@@ -402,12 +402,12 @@ export class Agent {
     if (!this.registrationFile.agentId) {
       throw new Error(
         'Agent must be registered before setting agentWallet on-chain. ' +
-          'Register the agent first, then call setAgentWallet().'
+          'Register the agent first, then call setWallet().'
       );
     }
 
     if (this.sdk.isReadOnly) {
-      throw new Error('No signer configured to submit setAgentWallet transaction');
+      throw new Error('No signer configured to submit setWallet transaction');
     }
 
     // Validate newWallet address
@@ -448,11 +448,7 @@ export class Agent {
       throw new Error(`Invalid deadline: ${deadlineValue} is in the past (chain time: ${chainNow})`);
     }
     if (deadlineValue > chainNow + 300) {
-      throw new Error(
-        `Invalid deadline: ${deadlineValue} is too far in the future. ` +
-          `ERC-8004 setAgentWallet requires a short deadline (<= chainTime + 300s). ` +
-          `(chain time: ${chainNow})`
-      );
+      throw new Error(`Invalid deadline: ${deadlineValue} is too far in the future. Must be <= chainTime + 300s. (chain time: ${chainNow})`);
     }
 
     const chainId = await this.sdk.chainId();
@@ -648,7 +644,7 @@ export class Agent {
 
       if (!signature) {
         const msg = lastError instanceof Error ? lastError.message : String(lastError);
-        throw new Error(`Failed to produce a valid setAgentWallet signature for this registry: ${msg}`);
+        throw new Error(`Failed to produce a valid wallet signature for this registry: ${msg}`);
       }
     }
 
@@ -665,6 +661,63 @@ export class Agent {
     this.registrationFile.walletChainId = chainId;
     this.registrationFile.updatedAt = Math.floor(Date.now() / 1000);
 
+    return txHash;
+  }
+
+  /**
+   * Unset agent wallet on-chain (ERC-8004 Jan 2026).
+   *
+   * This is on-chain only and requires the agent to be registered.
+   * Returns txHash (or "" if it was already unset).
+   */
+  async unsetWallet(): Promise<string> {
+    if (!this.registrationFile.agentId) {
+      throw new Error(
+        'Agent must be registered before unsetting agentWallet on-chain. ' +
+          'Register the agent first, then call unsetWallet().'
+      );
+    }
+
+    if (this.sdk.isReadOnly) {
+      throw new Error('No signer configured to submit unsetWallet transaction');
+    }
+
+    const { tokenId } = parseAgentId(this.registrationFile.agentId);
+    const identityRegistryAddress = this.sdk.identityRegistryAddress();
+
+    // Optional short-circuit if already unset (best-effort).
+    try {
+      const currentWallet = await this.sdk.chainClient.readContract<string>({
+        address: identityRegistryAddress,
+        abi: IDENTITY_REGISTRY_ABI,
+        functionName: 'getAgentWallet',
+        args: [BigInt(tokenId)],
+      });
+
+      // getAgentWallet returns bytes; viem typically renders as 0x-prefixed hex.
+      // Treat empty bytes as unset.
+      if (currentWallet === '0x' || currentWallet === '' || currentWallet === '0X') {
+        this.registrationFile.walletAddress = undefined;
+        this.registrationFile.walletChainId = undefined;
+        this.registrationFile.updatedAt = Math.floor(Date.now() / 1000);
+        return '';
+      }
+    } catch {
+      // ignore and proceed
+    }
+
+    const txHash = await this.sdk.chainClient.writeContract({
+      address: identityRegistryAddress,
+      abi: IDENTITY_REGISTRY_ABI,
+      functionName: 'unsetAgentWallet',
+      args: [BigInt(tokenId)],
+    });
+
+    await this._waitForTransactionWithRetry(txHash as `0x${string}`, TIMEOUTS.TRANSACTION_WAIT);
+
+    this.registrationFile.walletAddress = undefined;
+    this.registrationFile.walletChainId = undefined;
+    this.registrationFile.updatedAt = Math.floor(Date.now() / 1000);
     return txHash;
   }
 
@@ -1017,7 +1070,7 @@ export class Agent {
     const entries: Array<{ metadataKey: string; metadataValue: Hex }> = [];
 
     // Note: agentWallet is now a reserved metadata key that cannot be set via setMetadata()
-    // It must be set using setAgentWallet() with EIP-712 signature verification
+    // It must be set using setWallet() with signature verification
     // We do not include it in metadata entries here
 
     // Collect custom metadata

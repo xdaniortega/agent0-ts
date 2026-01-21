@@ -10,7 +10,7 @@ This release updates the on-chain stack and enables first-class browser usage.
   - `SDK.getIdentityRegistry()` / `getReputationRegistry()` / `getValidationRegistry()` are removed (they returned `ethers.Contract`).
 
 - Agent wallet API change:
-  - `agent.setAgentWallet(..., { newWalletSigner })` is replaced by `agent.setAgentWallet(..., { newWalletPrivateKey })`
+  - `agent.setWallet(..., { newWalletPrivateKey })` is the supported signature-gated flow
   - You can also pass `signature` directly if you already have it from an external signer.
 
 ## New features
