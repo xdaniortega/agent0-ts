@@ -6,6 +6,7 @@
  * 2. Browser: using an EIP-1193 wallet provider (ERC-6963)
  */
 
+import './_env';
 import { SDK } from '../src/index';
 import { discoverEip6963Providers, connectEip1193 } from '../src/browser/eip6963.js';
 
@@ -93,9 +94,9 @@ async function main() {
   
   try {
     // This works with any of the above signer methods
-    const agent = sdkWithWallet.createAgent(
+    const agent = sdkWithPrivateKey.createAgent(
       'Test Agent',
-      'An agent created with Wallet signer',
+      'An agent created with private-key signer',
       'https://example.com/image.png'
     );
     

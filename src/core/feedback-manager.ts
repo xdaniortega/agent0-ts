@@ -200,8 +200,9 @@ export class FeedbackManager {
       throw new Error('Reputation registry not available');
     }
 
+    let txHash: string | undefined;
     try {
-      const txHash = await this.chainClient.writeContract({
+      txHash = await this.chainClient.writeContract({
         address: this.reputationRegistryAddress,
         abi: REPUTATION_REGISTRY_ABI,
         functionName: 'giveFeedback',
@@ -217,7 +218,7 @@ export class FeedbackManager {
         ],
       });
 
-      await this.chainClient.waitForTransaction({ hash: txHash });
+      await this.chainClient.waitForTransaction({ hash: txHash as any });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to submit feedback to blockchain: ${errorMessage}`);
@@ -247,6 +248,7 @@ export class FeedbackManager {
       id: [parsedId.agentId, parsedId.clientAddress, parsedId.feedbackIndex] as FeedbackIdTuple,
       agentId,
       reviewer: clientAddress,
+      txHash,
       value: decodeReputationValue(rawValue, valueDecimals),
       tags: [tag1OnChain || undefined, tag2OnChain || undefined].filter(Boolean) as string[],
       endpoint: endpointOnChain || undefined,

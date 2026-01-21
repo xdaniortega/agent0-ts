@@ -68,6 +68,13 @@ export interface Feedback {
   id: FeedbackIdTuple; // (agentId, clientAddress, feedbackIndex)
   agentId: AgentId;
   reviewer: Address;
+  /**
+   * Transaction hash for the on-chain feedback write (when created via SDK).
+   * Optional because:
+   * - some callers may construct Feedback objects from subgraph data, and
+   * - older SDK builds did not include it.
+   */
+  txHash?: string;
   value?: number;
   tags: string[];
   /**

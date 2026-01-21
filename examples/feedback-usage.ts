@@ -8,6 +8,7 @@
  * 4. Append response to feedback
  */
 
+import './_env';
 import { SDK } from '../src/index';
 import { formatFeedbackId } from '../src/utils/id-format';
 

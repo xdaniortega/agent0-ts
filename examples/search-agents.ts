@@ -7,6 +7,7 @@
  * 3. Get agent summaries
  */
 
+import './_env';
 import { SDK } from '../src/index';
 
 async function main() {
@@ -53,12 +54,16 @@ async function main() {
   const agentId = '11155111:123'; // Replace with actual agent ID
   try {
     const agent = await sdk.getAgent(agentId);
-    console.log(`Agent: ${agent.name}`);
-    console.log(`Description: ${agent.description}`);
-    console.log(`MCP: ${agent.mcp ? 'Yes' : 'No'}`);
-    console.log(`A2A: ${agent.a2a ? 'Yes' : 'No'}`);
-    console.log(`Active: ${agent.active}`);
-    console.log(`x402 Support: ${agent.x402support}`);
+    if (!agent) {
+      console.log(`Agent not found: ${agentId}`);
+    } else {
+      console.log(`Agent: ${agent.name}`);
+      console.log(`Description: ${agent.description}`);
+      console.log(`MCP: ${agent.mcp ? 'Yes' : 'No'}`);
+      console.log(`A2A: ${agent.a2a ? 'Yes' : 'No'}`);
+      console.log(`Active: ${agent.active}`);
+      console.log(`x402 Support: ${agent.x402support}`);
+    }
   } catch (error) {
     console.error(`Failed to get agent: ${error}`);
   }

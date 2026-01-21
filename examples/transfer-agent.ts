@@ -7,6 +7,7 @@
  * 3. Verify new owner on-chain
  */
 
+import './_env';
 import { SDK } from '../src/index';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 

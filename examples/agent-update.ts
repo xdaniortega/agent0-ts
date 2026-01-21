@@ -8,6 +8,7 @@
  * 4. Update the registration file on-chain (re-register)
  */
 
+import './_env';
 import { SDK } from '../src/index';
 
 async function main() {

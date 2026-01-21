@@ -8,6 +8,7 @@
  * 4. Register the agent on-chain with IPFS
  */
 
+import './_env';
 import { SDK } from '../src/index';
 
 async function main() {

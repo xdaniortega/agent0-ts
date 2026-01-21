@@ -10,6 +10,7 @@
  * No off-chain feedback file is created/uploaded because the SDK is configured without IPFS.
  */
 
+import './_env';
 import { SDK } from '../src/index';
 
 async function main() {
