@@ -206,8 +206,18 @@ const reputationResults = await sdk.searchAgentsByReputation(
 // Get agent from specific chain
 const agent = await sdk.getAgent('84532:123'); // Base Sepolia
 
-// Search feedback for agent on specific chain
+// Search feedback for a specific agent (unchanged)
 const feedbacks = await sdk.searchFeedback({ agentId: '84532:123' }); // Base Sepolia
+
+// NEW: Search feedback given by a reviewer wallet (across all agents)
+const givenFeedback = await sdk.searchFeedback({
+  reviewers: ['0x742d35cc6634c0532925a3b844bc9e7595f0beb7'],
+});
+
+// NEW: Search feedback across multiple agents at once
+const multiFeedback = await sdk.searchFeedback({
+  agents: ['84532:123', '84532:456', '84532:789'],
+});
 
 // Get reputation summary for agent on specific chain
 const summary = await sdk.getReputationSummary('84532:123'); // Base Sepolia
@@ -225,7 +235,7 @@ const feedbackFile = sdk.prepareFeedbackFile({
 });
 
 // Give feedback (on-chain fields are passed directly)
-const feedback = await sdk.giveFeedback(
+const tx = await sdk.giveFeedback(
   '11155111:123',
   85, // value (number|string)
   'data_analyst', // tag1 (optional)
@@ -233,6 +243,8 @@ const feedback = await sdk.giveFeedback(
   'https://api.example.com/feedback', // endpoint (optional on-chain)
   feedbackFile // optional off-chain file
 );
+// Submitted-by-default: wait explicitly for confirmation to get a receipt + the domain result
+const { receipt, result: feedback } = await tx.waitConfirmed();
 
 // Search feedback
 const feedbackResults = await sdk.searchFeedback(
@@ -277,7 +289,8 @@ const sdk = new SDK({
 
 // Option 4: HTTP registration (no IPFS)
 const sdk = new SDK({ chainId: 11155111, rpcUrl: '...', signer: privateKey });
-await agent.registerHTTP('https://example.com/agent-registration.json');
+const regTx = await agent.registerHTTP('https://example.com/agent-registration.json');
+await regTx.waitConfirmed();
 ```
 
 ## Multi-Chain Support

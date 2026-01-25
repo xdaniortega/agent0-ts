@@ -27,6 +27,7 @@ import { SubgraphClient } from './subgraph-client.js';
 import { FeedbackManager } from './feedback-manager.js';
 import { AgentIndexer } from './indexer.js';
 import { Agent } from './agent.js';
+import type { TransactionHandle } from './transaction-handle.js';
 import {
   DEFAULT_REGISTRIES,
   DEFAULT_SUBGRAPH_URLS,
@@ -247,7 +248,8 @@ export class SDK {
       description,
       image,
       endpoints: [],
-      trustModels: [],
+      // Default trust model: reputation (if caller doesn't set one explicitly).
+      trustModels: [TrustModel.REPUTATION],
       owners: [],
       operators: [],
       active: false,
@@ -392,12 +394,10 @@ export class SDK {
   /**
    * Transfer agent ownership
    */
-  async transferAgent(agentId: AgentId, newOwner: Address): Promise<{
-    txHash: string;
-    from: Address;
-    to: Address;
-    agentId: AgentId;
-  }> {
+  async transferAgent(
+    agentId: AgentId,
+    newOwner: Address
+  ): Promise<TransactionHandle<{ txHash: string; from: Address; to: Address; agentId: AgentId }>> {
     const agent = await this.loadAgent(agentId);
     return agent.transfer(newOwner);
   }
@@ -450,7 +450,7 @@ export class SDK {
     tag2?: string,
     endpoint?: string,
     feedbackFile?: FeedbackFileInput
-  ): Promise<Feedback> {
+  ): Promise<TransactionHandle<Feedback>> {
     // Update feedback manager with registries
     this._feedbackManager.setReputationRegistryAddress(this.reputationRegistryAddress());
     this._feedbackManager.setIdentityRegistryAddress(this.identityRegistryAddress());
@@ -472,8 +472,33 @@ export class SDK {
     filters: FeedbackSearchFilters,
     options: FeedbackSearchOptions = {}
   ): Promise<Feedback[]> {
+    const mergedAgents = [
+      ...(filters.agents ?? []),
+      ...(filters.agentId ? [filters.agentId] : []),
+    ];
+    const agents = mergedAgents.length > 0 ? Array.from(new Set(mergedAgents)) : undefined;
+
+    const hasAnyFilter =
+      (agents?.length ?? 0) > 0 ||
+      (filters.reviewers?.length ?? 0) > 0 ||
+      (filters.tags?.length ?? 0) > 0 ||
+      (filters.capabilities?.length ?? 0) > 0 ||
+      (filters.skills?.length ?? 0) > 0 ||
+      (filters.tasks?.length ?? 0) > 0 ||
+      (filters.names?.length ?? 0) > 0 ||
+      options.minValue !== undefined ||
+      options.maxValue !== undefined;
+
+    // Previously, `agentId` was required so a fully-empty search wasn't possible.
+    // Keep behavior safe by rejecting empty searches that would otherwise return arbitrary global results.
+    if (!hasAnyFilter) {
+      throw new Error(
+        'searchFeedback requires at least one filter (agentId/agents/reviewers/tags/capabilities/skills/tasks/names/minValue/maxValue).'
+      );
+    }
+
     const params: SearchFeedbackParams = {
-      agents: [filters.agentId],
+      agents,
       tags: filters.tags,
       reviewers: filters.reviewers,
       capabilities: filters.capabilities,
@@ -495,7 +520,7 @@ export class SDK {
     clientAddress: Address,
     feedbackIndex: number,
     response: { uri: URI; hash: string }
-  ): Promise<string> {
+  ): Promise<TransactionHandle<Feedback>> {
     // Update feedback manager with registries
     this._feedbackManager.setReputationRegistryAddress(this.reputationRegistryAddress());
 
@@ -505,7 +530,7 @@ export class SDK {
   /**
    * Revoke feedback
    */
-  async revokeFeedback(agentId: AgentId, feedbackIndex: number): Promise<string> {
+  async revokeFeedback(agentId: AgentId, feedbackIndex: number): Promise<TransactionHandle<Feedback>> {
     // Update feedback manager with registries
     this._feedbackManager.setReputationRegistryAddress(this.reputationRegistryAddress());
 
@@ -633,7 +658,11 @@ export class SDK {
       owners: Array.isArray(rawData.owners) ? rawData.owners.filter((o): o is Address => typeof o === 'string') : [],
       operators: Array.isArray(rawData.operators) ? rawData.operators.filter((o): o is Address => typeof o === 'string') : [],
       active: typeof rawData.active === 'boolean' ? rawData.active : false,
-      x402support: typeof rawData.x402support === 'boolean' ? rawData.x402support : false,
+      // Accept both `x402Support` (ERC-8004 registration key) and `x402support` (legacy SDK key).
+      x402support:
+        typeof rawData.x402support === 'boolean'
+          ? rawData.x402support
+          : (typeof (rawData as any).x402Support === 'boolean' ? (rawData as any).x402Support : false),
       metadata: typeof rawData.metadata === 'object' && rawData.metadata !== null && !Array.isArray(rawData.metadata) 
         ? rawData.metadata as Record<string, unknown>
         : {},
@@ -649,11 +678,17 @@ export class SDK {
   private _transformEndpoints(rawData: Record<string, unknown>): Endpoint[] {
     const endpoints: Endpoint[] = [];
     
-    if (!rawData.endpoints || !Array.isArray(rawData.endpoints)) {
+    const rawServices = Array.isArray(rawData.services)
+      ? rawData.services
+      : Array.isArray(rawData.endpoints)
+      ? rawData.endpoints
+      : null;
+
+    if (!rawServices) {
       return endpoints;
     }
     
-    for (const ep of rawData.endpoints) {
+    for (const ep of rawServices) {
       // Check if it's already in the new format
       if (ep.type && ep.value !== undefined) {
         endpoints.push({

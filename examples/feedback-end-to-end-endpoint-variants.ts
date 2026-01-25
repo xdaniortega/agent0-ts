@@ -60,20 +60,22 @@ async function main() {
   console.log(`Submitting 2 feedback txs to agent ${agentId} on chain ${chainId}...`);
 
   // 1) No endpoint (omit the parameter)
-  const fb1 = await sdk.giveFeedback(agentId, valueNoEndpoint, tag1, tag2);
+  const tx1 = await sdk.giveFeedback(agentId, valueNoEndpoint, tag1, tag2);
+  const { result: fb1 } = await tx1.waitConfirmed();
   console.log(
     `- no-endpoint: id=${formatFeedbackId(fb1.id[0], fb1.id[1], fb1.id[2])}` +
       ` value=${fb1.value} tags=${fb1.tags.join(',')} endpoint=${fb1.endpoint ?? ''}` +
-      ` txHash=${fb1.txHash ?? ''}`
+      ` txHash=${fb1.txHash ?? tx1.hash ?? ''}`
   );
 
   // 2) Very short endpoint domain
   const shortEndpoint = 'nytimes.com';
-  const fb2 = await sdk.giveFeedback(agentId, valueWithEndpoint, tag1, tag2, shortEndpoint);
+  const tx2 = await sdk.giveFeedback(agentId, valueWithEndpoint, tag1, tag2, shortEndpoint);
+  const { result: fb2 } = await tx2.waitConfirmed();
   console.log(
     `- short-endpoint: id=${formatFeedbackId(fb2.id[0], fb2.id[1], fb2.id[2])}` +
       ` value=${fb2.value} tags=${fb2.tags.join(',')} endpoint=${fb2.endpoint ?? ''}` +
-      ` txHash=${fb2.txHash ?? ''}`
+      ` txHash=${fb2.txHash ?? tx2.hash ?? ''}`
   );
 
   const reviewer = fb1.reviewer.toLowerCase();

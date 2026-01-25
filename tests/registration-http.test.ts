@@ -67,8 +67,9 @@ describeMaybe('Agent Registration with HTTP URI', () => {
 
     // Register with mock URI to get agentId
     mockUri = 'https://example.com/agents/registration.json';
-    await agent.registerHTTP(mockUri);
-    agentId = agent.agentId!;
+    const regTx = await agent.registerHTTP(mockUri);
+    const { result: registrationFile } = await regTx.waitConfirmed({ timeoutMs: 120_000 });
+    agentId = registrationFile.agentId!;
 
     expect(agentId).toBeTruthy();
     expect(agent.agentURI).toBe(mockUri);
@@ -136,7 +137,8 @@ describeMaybe('Agent Registration with HTTP URI', () => {
     const filepathUpdated = path.join(__dirname, filenameUpdated);
     fs.writeFileSync(filepathUpdated, registrationJsonUpdated);
 
-    await agent.registerHTTP(mockUri);
+    const updateTx = await agent.registerHTTP(mockUri);
+    await updateTx.waitConfirmed({ timeoutMs: 120_000 });
 
     expect(agent.name).toBe(testData.name + ' UPDATED');
   });
@@ -166,7 +168,14 @@ describeMaybe('Agent Registration with HTTP URI', () => {
     const secondWalletAddress = privateKeyToAccount(
       (CLIENT_PRIVATE_KEY.startsWith('0x') ? CLIENT_PRIVATE_KEY : `0x${CLIENT_PRIVATE_KEY}`) as any
     ).address;
-    await agent.setWallet(secondWalletAddress, { newWalletPrivateKey: CLIENT_PRIVATE_KEY });
+    // 1.4.0 behavior: zero address is treated as "unset". Some deployments may set a non-zero default wallet.
+    // We only assert that after setWallet (or no-op) the readback equals the intended wallet.
+    const walletTx = await agent.setWallet(secondWalletAddress, { newWalletPrivateKey: CLIENT_PRIVATE_KEY });
+    if (walletTx) {
+      await walletTx.waitConfirmed({ timeoutMs: 180_000 });
+    }
+    const after = await agent.getWallet();
+    expect(after).toBe(secondWalletAddress);
   });
 });
 

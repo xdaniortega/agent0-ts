@@ -198,10 +198,17 @@ export interface SearchFeedbackParams {
 }
 
 /**
- * Filters for agent feedback search scoped to a single agentId.
+ * Filters for feedback search.
+ *
+ * Backwards compatible:
+ * - `agentId` used to be required; it is now optional.
+ *
+ * New:
+ * - `agents` allows searching across multiple agents in one call.
  */
 export interface FeedbackSearchFilters {
-  agentId: AgentId;
+  agentId?: AgentId;
+  agents?: AgentId[];
   tags?: string[];
   reviewers?: Address[];
   capabilities?: string[];

@@ -80,7 +80,8 @@ describeMaybe('Agent Registration with IPFS Pin', () => {
     agent.setX402Support(testData.x402support);
     agent.setTrust(testData.reputation, testData.cryptoEconomic, testData.teeAttestation);
 
-    const registrationFile = await agent.registerIPFS();
+    const regTx = await agent.registerIPFS();
+    const { result: registrationFile } = await regTx.waitConfirmed({ timeoutMs: 180_000 });
     agentId = registrationFile.agentId!;
 
     expect(agentId).toBeTruthy();
@@ -95,7 +96,15 @@ describeMaybe('Agent Registration with IPFS Pin', () => {
     const secondWalletAddress = privateKeyToAccount(
       (CLIENT_PRIVATE_KEY.startsWith('0x') ? CLIENT_PRIVATE_KEY : `0x${CLIENT_PRIVATE_KEY}`) as any
     ).address;
-    await agent.setWallet(secondWalletAddress, { newWalletPrivateKey: CLIENT_PRIVATE_KEY });
+    // 1.4.0 behavior: zero address is treated as "unset". Some deployments may set a non-zero default wallet.
+    // We only assert that after setWallet (or no-op) the readback equals the intended wallet.
+    const walletTx = await agent.setWallet(secondWalletAddress, { newWalletPrivateKey: CLIENT_PRIVATE_KEY });
+    // If already set, SDK returns undefined (no-op).
+    if (walletTx) {
+      await walletTx.waitConfirmed({ timeoutMs: 180_000 });
+    }
+    const after = await agent.getWallet();
+    expect(after).toBe(secondWalletAddress);
   });
 
   it(
@@ -138,7 +147,8 @@ describeMaybe('Agent Registration with IPFS Pin', () => {
       numericField: Math.floor(Math.random() * 9000) + 1000,
     });
 
-    const updatedRegistrationFile = await agent.registerIPFS();
+    const updateTx = await agent.registerIPFS();
+    const { result: updatedRegistrationFile } = await updateTx.waitConfirmed({ timeoutMs: 180_000 });
     expect(updatedRegistrationFile.agentURI).toBeTruthy();
     },
     180000

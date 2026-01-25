@@ -9,7 +9,7 @@ import type {
   FeedbackFileInput,
 } from '../models/interfaces.js';
 import type { AgentId, Address, URI, Timestamp, IdemKey } from '../models/types.js';
-import type { ChainClient } from './chain-client.js';
+import type { ChainClient, TransactionOptions } from './chain-client.js';
 import type { IPFSClient } from './ipfs-client.js';
 import type { SubgraphClient } from './subgraph-client.js';
 import { parseAgentId, formatAgentId, formatFeedbackId, parseFeedbackId } from '../utils/id-format.js';
@@ -17,6 +17,12 @@ import { DEFAULTS } from '../utils/constants.js';
 import { REPUTATION_REGISTRY_ABI } from './contracts.js';
 import { encodeReputationValue, decodeReputationValue } from '../utils/value-encoding.js';
 import { decodeEventLog, type Hex } from 'viem';
+import { TransactionHandle } from './transaction-handle.js';
+
+// giveFeedback has multiple dynamic string parameters which can cause gas estimation
+// issues with some RPC providers. We set a conservative fixed gas limit to bypass
+// estimation and avoid wallet prompt hangs.
+const GIVE_FEEDBACK_GAS_LIMIT = 300_000n;
 
 /**
  * Manages feedback operations for the Agent0 SDK
@@ -100,7 +106,7 @@ export class FeedbackManager {
     endpoint?: string,
     feedbackFile?: FeedbackFileInput,
     idem?: IdemKey
-  ): Promise<Feedback> {
+  ): Promise<TransactionHandle<Feedback>> {
     // Parse agent ID
     const { tokenId, chainId: agentChainId } = parseAgentId(agentId);
 
@@ -167,7 +173,8 @@ export class FeedbackManager {
           agentId: tokenId,
           clientAddress: `eip155:${agentChainId}:${clientAddress}`,
           createdAt,
-          value: encoded.normalized,
+          value: Number(rawValue),
+          valueDecimals,
 
           // OPTIONAL fields that mirror on-chain (spec)
           ...(tag1OnChain ? { tag1: tag1OnChain } : {}),
@@ -200,8 +207,9 @@ export class FeedbackManager {
       throw new Error('Reputation registry not available');
     }
 
-    let txHash: string | undefined;
+    let txHash: string;
     try {
+      const txOptions: TransactionOptions = { gasLimit: GIVE_FEEDBACK_GAS_LIMIT };
       txHash = await this.chainClient.writeContract({
         address: this.reputationRegistryAddress,
         abi: REPUTATION_REGISTRY_ABI,
@@ -216,55 +224,56 @@ export class FeedbackManager {
           feedbackUri,
           feedbackHash,
         ],
+        options: txOptions,
       });
-
-      await this.chainClient.waitForTransaction({ hash: txHash as any });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to submit feedback to blockchain: ${errorMessage}`);
     }
 
-    // Create feedback object
-    const parsedId = parseFeedbackId(formatFeedbackId(agentId, clientAddress, feedbackIndex));
+    return new TransactionHandle(txHash as Hex, this.chainClient, async () => {
+      // Create feedback object (deterministic from submission-time inputs)
+      const parsedId = parseFeedbackId(formatFeedbackId(agentId, clientAddress, feedbackIndex));
 
-    // Extract typed values from the optional off-chain file
-    const textValue = feedbackFile && typeof feedbackFile.text === 'string' ? feedbackFile.text : undefined;
-    const contextValue =
-      feedbackFile &&
-      feedbackFile.context &&
-      typeof feedbackFile.context === 'object' &&
-      !Array.isArray(feedbackFile.context)
-        ? (feedbackFile.context as Record<string, any>)
-      : undefined;
-    const proofOfPaymentValue =
-      feedbackFile &&
-      feedbackFile.proofOfPayment &&
-      typeof feedbackFile.proofOfPayment === 'object' &&
-      !Array.isArray(feedbackFile.proofOfPayment)
-        ? (feedbackFile.proofOfPayment as Record<string, any>)
-      : undefined;
+      // Extract typed values from the optional off-chain file
+      const textValue = feedbackFile && typeof feedbackFile.text === 'string' ? feedbackFile.text : undefined;
+      const contextValue =
+        feedbackFile &&
+        feedbackFile.context &&
+        typeof feedbackFile.context === 'object' &&
+        !Array.isArray(feedbackFile.context)
+          ? (feedbackFile.context as Record<string, any>)
+          : undefined;
+      const proofOfPaymentValue =
+        feedbackFile &&
+        feedbackFile.proofOfPayment &&
+        typeof feedbackFile.proofOfPayment === 'object' &&
+        !Array.isArray(feedbackFile.proofOfPayment)
+          ? (feedbackFile.proofOfPayment as Record<string, any>)
+          : undefined;
 
-    return {
-      id: [parsedId.agentId, parsedId.clientAddress, parsedId.feedbackIndex] as FeedbackIdTuple,
-      agentId,
-      reviewer: clientAddress,
-      txHash,
-      value: decodeReputationValue(rawValue, valueDecimals),
-      tags: [tag1OnChain || undefined, tag2OnChain || undefined].filter(Boolean) as string[],
-      endpoint: endpointOnChain || undefined,
-      text: textValue,
-      context: contextValue,
-      proofOfPayment: proofOfPaymentValue,
-      fileURI: feedbackUri || undefined,
-      createdAt: Math.floor(Date.now() / 1000),
-      answers: [],
-      isRevoked: false,
-      // Off-chain only fields
-      capability: feedbackFile && typeof feedbackFile.capability === 'string' ? feedbackFile.capability : undefined,
-      name: feedbackFile && typeof feedbackFile.name === 'string' ? feedbackFile.name : undefined,
-      skill: feedbackFile && typeof feedbackFile.skill === 'string' ? feedbackFile.skill : undefined,
-      task: feedbackFile && typeof feedbackFile.task === 'string' ? feedbackFile.task : undefined,
-    };
+      return {
+        id: [parsedId.agentId, parsedId.clientAddress, parsedId.feedbackIndex] as FeedbackIdTuple,
+        agentId,
+        reviewer: clientAddress,
+        txHash,
+        value: decodeReputationValue(rawValue, valueDecimals),
+        tags: [tag1OnChain || undefined, tag2OnChain || undefined].filter(Boolean) as string[],
+        endpoint: endpointOnChain || undefined,
+        text: textValue,
+        context: contextValue,
+        proofOfPayment: proofOfPaymentValue,
+        fileURI: feedbackUri || undefined,
+        createdAt: Math.floor(Date.now() / 1000),
+        answers: [],
+        isRevoked: false,
+        // Off-chain only fields
+        capability: feedbackFile && typeof feedbackFile.capability === 'string' ? feedbackFile.capability : undefined,
+        name: feedbackFile && typeof feedbackFile.name === 'string' ? feedbackFile.name : undefined,
+        skill: feedbackFile && typeof feedbackFile.skill === 'string' ? feedbackFile.skill : undefined,
+        task: feedbackFile && typeof feedbackFile.task === 'string' ? feedbackFile.task : undefined,
+      };
+    });
   }
 
   /**
@@ -591,7 +600,7 @@ export class FeedbackManager {
     feedbackIndex: number,
     responseUri: URI,
     responseHash: string
-  ): Promise<string> {
+  ): Promise<TransactionHandle<Feedback>> {
     if (!this.reputationRegistryAddress) {
       throw new Error('Reputation registry not available');
     }
@@ -605,7 +614,10 @@ export class FeedbackManager {
         functionName: 'appendResponse',
         args: [BigInt(tokenId), clientAddress, BigInt(feedbackIndex), responseUri, responseHash],
       });
-      return txHash;
+      return new TransactionHandle(txHash as Hex, this.chainClient, async () => {
+        const fb = await this.getFeedback(agentId, clientAddress, feedbackIndex);
+        return { ...fb, txHash };
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to append response: ${errorMessage}`);
@@ -615,7 +627,7 @@ export class FeedbackManager {
   /**
    * Revoke feedback
    */
-  async revokeFeedback(agentId: AgentId, feedbackIndex: number): Promise<string> {
+  async revokeFeedback(agentId: AgentId, feedbackIndex: number): Promise<TransactionHandle<Feedback>> {
     if (!this.reputationRegistryAddress) {
       throw new Error('Reputation registry not available');
     }
@@ -623,7 +635,7 @@ export class FeedbackManager {
     const { tokenId } = parseAgentId(agentId);
 
     // Get client address (the one revoking - must be the reviewer)
-    await this.chainClient.ensureAddress();
+    const clientAddress = await this.chainClient.ensureAddress();
 
     try {
       const txHash = await this.chainClient.writeContract({
@@ -632,7 +644,10 @@ export class FeedbackManager {
         functionName: 'revokeFeedback',
         args: [BigInt(tokenId), BigInt(feedbackIndex)],
       });
-      return txHash;
+      return new TransactionHandle(txHash as Hex, this.chainClient, async () => {
+        const fb = await this.getFeedback(agentId, clientAddress, feedbackIndex);
+        return { ...fb, txHash };
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to revoke feedback: ${errorMessage}`);

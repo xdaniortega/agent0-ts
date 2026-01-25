@@ -90,13 +90,14 @@ async function main() {
     const endpoint = `${endpointBase}&i=${i}&t=${encodeURIComponent(item.tag2)}`;
     submittedEndpoints.push(endpoint);
 
-    const feedback = await sdk.giveFeedback(agentId, item.value, item.tag1, item.tag2, endpoint);
+    const tx = await sdk.giveFeedback(agentId, item.value, item.tag1, item.tag2, endpoint);
+    const { result: feedback } = await tx.waitConfirmed();
     reviewerAddresses.add(feedback.reviewer.toLowerCase());
 
     console.log(
       `- submitted ${i + 1}/${planned.length}: id=${formatFeedbackId(feedback.id[0], feedback.id[1], feedback.id[2])}` +
         ` value=${feedback.value} tags=${feedback.tags.join(',')} endpoint=${feedback.endpoint ?? ''}` +
-        ` txHash=${feedback.txHash ?? ''}`
+        ` txHash=${feedback.txHash ?? tx.hash ?? ''}`
     );
   }
 

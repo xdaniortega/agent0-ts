@@ -22,6 +22,8 @@ export { FeedbackManager } from './core/feedback-manager.js';
 export { EndpointCrawler } from './core/endpoint-crawler.js';
 export type { McpCapabilities, A2aCapabilities } from './core/endpoint-crawler.js';
 export { AgentIndexer } from './core/indexer.js';
+export { TransactionHandle } from './core/transaction-handle.js';
+export type { TransactionMined, TransactionWaitOptions } from './core/transaction-handle.js';
 
 // Export contract definitions
 export * from './core/contracts.js';

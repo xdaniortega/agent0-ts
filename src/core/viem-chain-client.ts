@@ -15,7 +15,7 @@ import {
 } from 'viem';
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 import type { Address } from '../models/types.js';
-import type { ChainClient, ChainLog, ChainReceipt, EIP1193Provider, TransactionOptions } from './chain-client.js';
+import type { ChainClient, ChainLog, ChainReceipt, EIP1193Provider, TransactionOptions, WaitForTransactionArgs } from './chain-client.js';
 import { normalizeEcdsaSignature } from '../utils/signatures.js';
 
 export type ViemChainClientConfig = {
@@ -240,12 +240,13 @@ export class ViemChainClient implements ChainClient {
     return hash as `0x${string}`;
   }
 
-  async waitForTransaction(args: { hash: `0x${string}`; timeoutMs?: number }): Promise<ChainReceipt> {
+  async waitForTransaction(args: WaitForTransactionArgs): Promise<ChainReceipt> {
     let receipt: any;
     try {
       receipt = await this.publicClient.waitForTransactionReceipt({
         hash: args.hash as Hex,
         timeout: args.timeoutMs,
+        confirmations: args.confirmations,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -253,6 +254,7 @@ export class ViemChainClient implements ChainClient {
         receipt = await this.receiptClient.waitForTransactionReceipt({
           hash: args.hash as Hex,
           timeout: args.timeoutMs,
+          confirmations: args.confirmations,
         });
       } else {
         throw err;

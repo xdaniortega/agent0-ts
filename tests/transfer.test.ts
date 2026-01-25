@@ -73,7 +73,8 @@ describeMaybe('Agent Transfer', () => {
     agent.updateInfo('Transfer Test Agent', 'An agent for testing transfer functionality', 'https://example.com/transfer-test-agent.png');
 
     // Register agent on-chain
-    const registrationResult = await agent.registerIPFS();
+    const registrationTx = await agent.registerIPFS();
+    const { result: registrationResult } = await registrationTx.waitConfirmed({ timeoutMs: 180_000 });
     agentId = registrationResult.agentId!;
 
     expect(agentId).toBeTruthy();
@@ -88,7 +89,8 @@ describeMaybe('Agent Transfer', () => {
     const agent = await agentSdk.loadAgent(agentId);
 
     // Transfer agent using Agent.transfer() method
-    const transferResult = await agent.transfer(ownerBAddress);
+    const transferTx = await agent.transfer(ownerBAddress);
+    const { result: transferResult } = await transferTx.waitConfirmed({ timeoutMs: 180_000 });
 
     expect(transferResult.txHash).toBeTruthy();
     expect(transferResult.from.toLowerCase()).toBe(ownerAAddress.toLowerCase());

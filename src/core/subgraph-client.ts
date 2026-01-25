@@ -35,6 +35,8 @@ export type AgentRegistrationFile = {
   description?: string | null;
   image?: string | null;
   active?: boolean | null;
+  // Subgraph schema (Jan 2026+) exposes `x402Support`; older deployments used `x402support`.
+  x402Support?: boolean | null;
   x402support?: boolean | null;
   supportedTrusts?: string[] | null;
   mcpEndpoint?: string | null;
@@ -71,6 +73,18 @@ export class SubgraphClient {
       const data = await this.client.request<T>(query, variables || {});
       return data;
     } catch (error) {
+      // Backwards/forwards compatibility for hosted subgraphs:
+      // Some deployments still expose `x402support` instead of `x402Support`.
+      const msg = error instanceof Error ? error.message : String(error);
+      if (
+        (msg.includes('Cannot query field "x402Support"') || msg.includes('has no field `x402Support`')) &&
+        query.includes('x402Support')
+      ) {
+        // Avoid String.prototype.replaceAll for older TS lib targets.
+        const q2 = query.split('x402Support').join('x402support');
+        const data2 = await this.client.request<T>(q2, variables || {});
+        return data2;
+      }
       throw new Error(`Failed to query subgraph: ${error}`);
     }
   }
@@ -160,7 +174,7 @@ export class SubgraphClient {
             description
             image
             active
-            x402support
+            x402Support
             supportedTrusts
             mcpEndpoint
             mcpVersion
@@ -238,7 +252,7 @@ export class SubgraphClient {
             description
             image
             active
-            x402support
+            x402Support
             supportedTrusts
             mcpEndpoint
             mcpVersion
@@ -303,7 +317,7 @@ export class SubgraphClient {
       mcpPrompts: regFile?.mcpPrompts || [],
       mcpResources: regFile?.mcpResources || [],
       active: regFile?.active ?? false,
-      x402support: regFile?.x402support ?? false,
+      x402support: regFile?.x402Support ?? regFile?.x402support ?? false,
       extras: {},
     };
   }
@@ -332,7 +346,7 @@ export class SubgraphClient {
       // Push basic filters to subgraph using nested registrationFile filters
       const registrationFileFilters: Record<string, unknown> = {};
       if (params.active !== undefined) registrationFileFilters.active = params.active;
-      if (params.x402support !== undefined) registrationFileFilters.x402support = params.x402support;
+      if (params.x402support !== undefined) registrationFileFilters.x402Support = params.x402support;
       if (params.ens) registrationFileFilters.ens = params.ens.toLowerCase();
       // agentWallet is stored on the Agent entity (not registrationFile) in the current subgraph schema
       // so we can't push this filter into registrationFile_ here.
@@ -372,7 +386,7 @@ export class SubgraphClient {
       const allAgents = await this.getAgents({ where: whereWithFilters, first, skip });
 
       // Only filter client-side for fields that can't be filtered at subgraph level
-      // Fields already filtered at subgraph level: active, x402support, mcp, a2a, ens, walletAddress, owners, operators
+      // Fields already filtered at subgraph level: active, x402Support, mcp, a2a, ens, walletAddress, owners, operators
       return allAgents.filter((agent) => {
         // Name filtering (substring search - not supported at subgraph level)
         if (params.name && !agent.name.toLowerCase().includes(params.name.toLowerCase())) {
@@ -471,32 +485,9 @@ export class SubgraphClient {
       whereConditions.push(`value_lte: ${params.maxValue}`);
     }
 
-    // Feedback file filters
-    const feedbackFileFilters: string[] = [];
-
-    if (params.capabilities && params.capabilities.length > 0) {
-      const capabilities = params.capabilities.map((cap) => `"${cap}"`).join(', ');
-      feedbackFileFilters.push(`capability_in: [${capabilities}]`);
-    }
-
-    if (params.skills && params.skills.length > 0) {
-      const skills = params.skills.map((skill) => `"${skill}"`).join(', ');
-      feedbackFileFilters.push(`skill_in: [${skills}]`);
-    }
-
-    if (params.tasks && params.tasks.length > 0) {
-      const tasks = params.tasks.map((task) => `"${task}"`).join(', ');
-      feedbackFileFilters.push(`task_in: [${tasks}]`);
-    }
-
-    if (params.names && params.names.length > 0) {
-      const names = params.names.map((name) => `"${name}"`).join(', ');
-      feedbackFileFilters.push(`name_in: [${names}]`);
-    }
-
-    if (feedbackFileFilters.length > 0) {
-      whereConditions.push(`feedbackFile_: { ${feedbackFileFilters.join(', ')} }`);
-    }
+    // Breaking change (1.4.0 / spec-only): legacy flat feedback file fields are not indexed.
+    // The current subgraph schema does not expose FeedbackFile.{capability,skill,task,context,name}.
+    // We therefore do not apply these filters at the subgraph level.
 
     // Use tag_filter_condition if tags were provided, otherwise use standard where clause
     let whereClause = '';
@@ -533,11 +524,6 @@ export class SubgraphClient {
             id
             feedbackId
             text
-            capability
-            name
-            skill
-            task
-            context
             proofOfPaymentFromAddress
             proofOfPaymentToAddress
             proofOfPaymentChainId
@@ -593,11 +579,6 @@ export class SubgraphClient {
               id
               feedbackId
               text
-              capability
-              name
-              skill
-              task
-              context
               proofOfPaymentFromAddress
               proofOfPaymentToAddress
               proofOfPaymentChainId
@@ -660,36 +641,13 @@ export class SubgraphClient {
       feedbackFilters.push(`clientAddress_in: [${reviewersList}]`);
     }
 
-    // Feedback file filters
-    const feedbackFileFilters: string[] = [];
-
-    if (capabilities && capabilities.length > 0) {
-      const capabilitiesList = capabilities.map((cap) => `"${cap}"`).join(', ');
-      feedbackFileFilters.push(`capability_in: [${capabilitiesList}]`);
-    }
-
-    if (skills && skills.length > 0) {
-      const skillsList = skills.map((skill) => `"${skill}"`).join(', ');
-      feedbackFileFilters.push(`skill_in: [${skillsList}]`);
-    }
-
-    if (tasks && tasks.length > 0) {
-      const tasksList = tasks.map((task) => `"${task}"`).join(', ');
-      feedbackFileFilters.push(`task_in: [${tasksList}]`);
-    }
-
-    if (names && names.length > 0) {
-      const namesList = names.map((name) => `"${name}"`).join(', ');
-      feedbackFileFilters.push(`name_in: [${namesList}]`);
-    }
-
-    if (feedbackFileFilters.length > 0) {
-      feedbackFilters.push(`feedbackFile_: { ${feedbackFileFilters.join(', ')} }`);
-    }
+    // Breaking change (1.4.0 / spec-only): legacy flat feedback file fields are not indexed.
+    // The current subgraph schema does not expose FeedbackFile.{capability,skill,task,context,name}.
+    // We therefore do not apply these filters at the subgraph level.
 
     // If we have feedback filters, first query feedback to get agent IDs
     let agentWhere = '';
-    if (tags || capabilities || skills || tasks || names || reviewers) {
+    if (tags || reviewers) {
       const feedbackWhere = feedbackFilters.length > 0 
         ? `{ ${feedbackFilters.join(', ')} }`
         : '{}';
@@ -786,7 +744,7 @@ export class SubgraphClient {
             description
             image
             active
-            x402support
+            x402Support
             supportedTrusts
             mcpEndpoint
             mcpVersion
@@ -803,12 +761,6 @@ export class SubgraphClient {
           feedback(where: ${feedbackWhereForAgents}) {
             value
             isRevoked
-            feedbackFile {
-              capability
-              skill
-              task
-              name
-            }
           }
         }
       }

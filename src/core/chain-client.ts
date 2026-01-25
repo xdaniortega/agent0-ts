@@ -25,6 +25,18 @@ export type ChainReceipt = {
   logs: ChainLog[];
 };
 
+export type WaitForTransactionArgs = {
+  hash: Hex;
+  timeoutMs?: number;
+  /**
+   * Number of confirmations to wait for.
+   *
+   * - 1 means "mined" (included in a block)
+   * - >1 means additional confirmations beyond the inclusion block
+   */
+  confirmations?: number;
+};
+
 /**
  * Minimal EIP-1193 provider shape (wallet/injected provider).
  */
@@ -93,7 +105,7 @@ export interface ChainClient {
   /**
    * Wait for a transaction to be mined.
    */
-  waitForTransaction(args: { hash: Hex; timeoutMs?: number }): Promise<ChainReceipt>;
+  waitForTransaction(args: WaitForTransactionArgs): Promise<ChainReceipt>;
 
   /**
    * Fetch logs from the public RPC.

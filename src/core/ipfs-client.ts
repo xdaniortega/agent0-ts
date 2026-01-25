@@ -358,7 +358,7 @@ export class IPFSClient {
     identityRegistryAddress?: string
   ): Promise<string> {
     // Convert from internal format { type, value, meta } to ERC-8004 format { name, endpoint, version }
-    const endpoints: Array<Record<string, unknown>> = [];
+    const services: Array<Record<string, unknown>> = [];
     for (const ep of registrationFile.endpoints) {
       const endpointDict: Record<string, unknown> = {
         name: ep.type, // EndpointType enum value (e.g., "MCP", "A2A")
@@ -370,16 +370,7 @@ export class IPFSClient {
         Object.assign(endpointDict, ep.meta);
       }
       
-      endpoints.push(endpointDict);
-    }
-    
-    // Add walletAddress as an endpoint if present
-    if (registrationFile.walletAddress) {
-      const walletChainId = registrationFile.walletChainId || chainId || 1;
-      endpoints.push({
-        name: 'agentWallet',
-        endpoint: `eip155:${walletChainId}:${registrationFile.walletAddress}`,
-      });
+      services.push(endpointDict);
     }
     
     // Build registrations array
@@ -419,13 +410,14 @@ export class IPFSClient {
       name: registrationFile.name,
       description: registrationFile.description,
       ...(registrationFile.image && { image: registrationFile.image }),
-      endpoints,
+      services,
       ...(registrations.length > 0 && { registrations }),
       ...(registrationFile.trustModels.length > 0 && {
-        supportedTrusts: registrationFile.trustModels,
+        supportedTrust: registrationFile.trustModels,
       }),
       active: registrationFile.active,
-      x402support: registrationFile.x402support,
+      // ERC-8004 registration file uses `x402Support` (camelCase).
+      x402Support: registrationFile.x402support,
     };
     
     return this.addJson(data, 'agent-registration.json');

@@ -76,7 +76,7 @@ The feedback API has been simplified so the main `giveFeedback` call directly ta
 #### ✅ New (v1.0.2)
 
 ```ts
-await sdk.giveFeedback(
+const tx = await sdk.giveFeedback(
   agentId,
   score,
   tag1?,      // optional
@@ -84,6 +84,7 @@ await sdk.giveFeedback(
   endpoint?,  // optional, stored on-chain
   feedbackFile? // optional off-chain file content (Pinata/Filecoin/IPFS node)
 );
+const { receipt, result: feedback } = await tx.waitConfirmed();
 ```
 
 #### ❌ Removed (no compatibility)

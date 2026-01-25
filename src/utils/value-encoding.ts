@@ -7,7 +7,7 @@
  */
 
 const MAX_VALUE_DECIMALS = 18;
-const MAX_RAW_ABS = 10n ** 50n; // matches ReputationRegistryUpgradeable MAX_ABS_VALUE = 1e50
+const MAX_RAW_ABS = 10n ** 38n; // matches ReputationRegistryUpgradeable MAX_ABS_VALUE = 1e38
 
 export type EncodedReputationValue = {
   value: bigint;

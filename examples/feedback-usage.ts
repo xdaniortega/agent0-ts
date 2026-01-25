@@ -57,7 +57,7 @@ async function main() {
   console.log('Submitting feedback...');
   // ERC-8004 Jan 2026: `endpoint` is an optional *on-chain* field.
   // The SDK will store it on-chain (and also include it in the off-chain file as fallback if IPFS is used).
-  const feedback = await sdk.giveFeedback(
+  const feedbackTx = await sdk.giveFeedback(
     agentId,
     85,
     'data_analyst',
@@ -65,6 +65,9 @@ async function main() {
     'https://api.example.com/feedback',
     feedbackFile
   );
+  console.log(`Submitted tx hash: ${feedbackTx.hash}`);
+
+  const { result: feedback } = await feedbackTx.waitConfirmed();
   console.log(
     `Feedback submitted with ID: ${formatFeedbackId(feedback.id[0], feedback.id[1], feedback.id[2])}`
   );
@@ -93,11 +96,13 @@ async function main() {
     const responseHash = '0x' + '00'.repeat(32); // Hash of response file
 
     console.log('\nAppending response to feedback...');
-    const txHash = await sdk.appendResponse(agentIdFromFeedback, clientAddress, feedbackIndex, {
+    const appendTx = await sdk.appendResponse(agentIdFromFeedback, clientAddress, feedbackIndex, {
       uri: responseUri,
       hash: responseHash,
     });
-    console.log(`Response appended. Transaction: ${txHash}`);
+    console.log(`Submitted tx hash: ${appendTx.hash}`);
+    await appendTx.waitConfirmed();
+    console.log('Response appended and confirmed.');
   }
 
   // 5. Get reputation summary

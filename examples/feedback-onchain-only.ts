@@ -35,13 +35,15 @@ async function main() {
   const agentId = '11155111:123'; // Replace with an existing agent ID
 
   console.log('Submitting on-chain only feedback...');
-  const feedback = await sdk.giveFeedback(
+  const tx = await sdk.giveFeedback(
     agentId,
     92,
     'quality',
     'latency',
     'https://api.example.com/feedback' // optional on-chain endpoint
   );
+  console.log(`Submitted tx hash: ${tx.hash}`);
+  const { result: feedback } = await tx.waitConfirmed();
 
   console.log('Submitted feedback:', feedback.id, {
     value: feedback.value,
