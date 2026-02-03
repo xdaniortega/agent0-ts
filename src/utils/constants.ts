@@ -19,6 +19,7 @@ export const TIMEOUTS = {
   PINATA_UPLOAD: 80000, // 80 seconds
   TRANSACTION_WAIT: 45000, // 45 seconds
   ENDPOINT_CRAWLER_DEFAULT: 5000, // 5 seconds
+  SEMANTIC_SEARCH: 20000, // 20 seconds (embedding + vector DB, cold start)
 } as const;
 
 /**

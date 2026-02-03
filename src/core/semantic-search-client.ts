@@ -26,13 +26,14 @@ export class SemanticSearchClient {
 
     const body: Record<string, unknown> = { query: query.trim() };
     if (opts.minScore !== undefined) body.minScore = opts.minScore;
-    if (opts.topK !== undefined) body.topK = opts.topK;
+    // API expects "limit" not "topK" (semantic-search.ag0.xyz v1)
+    if (opts.topK !== undefined) body.limit = opts.topK;
 
     const res = await fetch(`${this.baseUrl}/api/v1/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUTS.ENDPOINT_CRAWLER_DEFAULT),
+      signal: AbortSignal.timeout(TIMEOUTS.SEMANTIC_SEARCH),
     });
 
     if (!res.ok) {
@@ -40,7 +41,8 @@ export class SemanticSearchClient {
     }
 
     const json: any = await res.json();
-    const results: any[] = Array.isArray(json?.results) ? json.results : Array.isArray(json) ? json : [];
+    const raw: any[] = Array.isArray(json?.results) ? json.results : Array.isArray(json) ? json : [];
+    const results = raw.filter((r) => r != null && typeof r === 'object');
 
     return results
       .map((r) => ({
