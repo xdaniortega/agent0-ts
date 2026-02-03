@@ -4,17 +4,15 @@
 import type {
   AgentSummary,
   Feedback,
-  SearchParams,
   SearchFeedbackParams,
   SearchResultMeta,
   RegistrationFile,
   Endpoint,
   FeedbackFileInput,
   SearchOptions,
-  ReputationSearchFilters,
-  ReputationSearchOptions,
   FeedbackSearchFilters,
   FeedbackSearchOptions,
+  SearchFilters,
 } from '../models/interfaces.js';
 import type { AgentId, ChainId, Address, URI } from '../models/types.js';
 import { EndpointType, TrustModel } from '../models/enums.js';
@@ -113,7 +111,7 @@ export class SDK {
     }
 
     // Initialize indexer
-    this._indexer = new AgentIndexer(this._subgraphClient, this._subgraphUrls);
+    this._indexer = new AgentIndexer(this._subgraphClient, this._subgraphUrls, this._chainId);
 
     // Initialize IPFS client
     if (config.ipfs) {
@@ -341,54 +339,13 @@ export class SDK {
    * Supports multi-chain search when chains parameter is provided
    */
   async searchAgents(
-    filters: SearchParams = {},
+    filters: SearchFilters = {},
     options: SearchOptions = {}
   ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta?: SearchResultMeta }> {
     const pageSize = options.pageSize ?? 50;
     const cursor = options.cursor;
     const sort = options.sort ?? [];
-    return this._indexer.searchAgents(filters, pageSize, cursor, sort);
-  }
-
-  /**
-   * Search agents by reputation
-   * Supports multi-chain search when chains parameter is provided
-   */
-  async searchAgentsByReputation(
-    filters: ReputationSearchFilters = {},
-    options: ReputationSearchOptions = {}
-  ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta?: SearchResultMeta }> {
-    // Parse cursor to skip value
-    let skip = 0;
-    if (options.cursor) {
-      try {
-        skip = parseInt(options.cursor, 10);
-      } catch {
-        skip = 0;
-      }
-    }
-
-    // Default sort
-    const sort = options.sort ?? ['createdAt:desc'];
-    const pageSize = options.pageSize ?? 50;
-    const includeRevoked = options.includeRevoked ?? false;
-    const chains = options.chains;
-
-    return this._indexer.searchAgentsByReputation(
-      filters.agents,
-      filters.tags,
-      filters.reviewers,
-      filters.capabilities,
-      filters.skills,
-      filters.tasks,
-      filters.names,
-      filters.minAverageValue,
-      includeRevoked,
-      pageSize,
-      skip,
-      sort,
-      chains
-    );
+    return this._indexer.searchAgents(filters, { pageSize, cursor, sort, ...options });
   }
 
   /**

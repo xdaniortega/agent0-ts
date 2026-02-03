@@ -3,7 +3,7 @@
  */
 
 import { GraphQLClient } from 'graphql-request';
-import type { AgentSummary, SearchParams } from '../models/interfaces.js';
+import type { AgentSummary, SearchFilters } from '../models/interfaces.js';
 import { normalizeAddress } from '../utils/validation.js';
 
 export interface SubgraphQueryOptions {
@@ -15,6 +15,41 @@ export interface SubgraphQueryOptions {
   includeRegistrationFile?: boolean;
 }
 
+export interface SearchAgentsV2Options {
+  where?: Record<string, unknown> | null;
+  first: number;
+  skip: number;
+  orderBy: string;
+  orderDirection: 'asc' | 'desc';
+}
+
+export type QueryAgentMetadata = {
+  id: string;
+  key: string;
+  value: string;
+  updatedAt: bigint;
+  agent: { id: string };
+};
+
+export type QueryFeedback = {
+  id: string;
+  agent: { id: string };
+  clientAddress: string;
+  value: string; // BigDecimal serialized
+  tag1?: string | null;
+  tag2?: string | null;
+  endpoint?: string | null;
+  isRevoked: boolean;
+  createdAt: bigint;
+  responses?: Array<{ id: string }> | null;
+};
+
+export type QueryFeedbackResponse = {
+  id: string;
+  feedback: { id: string };
+  createdAt: bigint;
+};
+
 export type QueryAgent = {
   id: string;
   chainId: bigint;
@@ -22,9 +57,12 @@ export type QueryAgent = {
   owner?: string | null;
   operators?: string[] | null;
   agentURI?: string | null;
+  agentURIType?: string | null;
   createdAt?: bigint | null;
   updatedAt?: bigint | null;
   agentWallet?: string | null;
+  totalFeedback?: bigint | null;
+  lastActivity?: bigint | null;
   registrationFile?: AgentRegistrationFile | null;
 };
 
@@ -43,6 +81,11 @@ export type AgentRegistrationFile = {
   mcpVersion?: string | null;
   a2aEndpoint?: string | null;
   a2aVersion?: string | null;
+  webEndpoint?: string | null;
+  emailEndpoint?: string | null;
+  hasOASF?: boolean | null;
+  oasfSkills?: string[] | null;
+  oasfDomains?: string[] | null;
   ens?: string | null;
   did?: string | null;
   mcpTools?: string[] | null;
@@ -76,6 +119,15 @@ export class SubgraphClient {
       // Backwards/forwards compatibility for hosted subgraphs:
       // Some deployments still expose `x402support` instead of `x402Support`.
       const msg = error instanceof Error ? error.message : String(error);
+      // Some deployments do not yet expose `hasOASF` on AgentRegistrationFile.
+      if (
+        (msg.includes('Cannot query field "hasOASF"') || msg.includes('has no field `hasOASF`')) &&
+        query.includes('hasOASF')
+      ) {
+        const q2 = query.split('hasOASF').join('oasfEndpoint');
+        const data2 = await this.client.request<T>(q2, variables || {});
+        return data2;
+      }
       if (
         (msg.includes('Cannot query field "x402Support"') || msg.includes('has no field `x402Support`')) &&
         query.includes('x402Support')
@@ -180,6 +232,11 @@ export class SubgraphClient {
             mcpVersion
             a2aEndpoint
             a2aVersion
+            webEndpoint
+            emailEndpoint
+            hasOASF
+            oasfSkills
+            oasfDomains
             ens
             did
             mcpTools
@@ -205,9 +262,12 @@ export class SubgraphClient {
           owner
           operators
           agentURI
+          agentURIType
           agentWallet
           createdAt
           updatedAt
+          totalFeedback
+          lastActivity
           ${regFileFragment}
         }
       }
@@ -230,21 +290,30 @@ export class SubgraphClient {
   }
 
   /**
-   * Get a single agent by ID
+   * V2 agent query: pass a GraphQL `where` object via variables (no ad-hoc string building).
    */
-  async getAgentById(agentId: string): Promise<AgentSummary | null> {
+  async searchAgentsV2(opts: SearchAgentsV2Options): Promise<AgentSummary[]> {
     const query = `
-      query GetAgent($agentId: String!) {
-        agent(id: $agentId) {
+      query SearchAgentsV2(
+        $where: Agent_filter
+        $first: Int!
+        $skip: Int!
+        $orderBy: Agent_orderBy!
+        $orderDirection: OrderDirection!
+      ) {
+        agents(where: $where, first: $first, skip: $skip, orderBy: $orderBy, orderDirection: $orderDirection) {
           id
           chainId
           agentId
           owner
           operators
           agentURI
+          agentURIType
           agentWallet
           createdAt
           updatedAt
+          totalFeedback
+          lastActivity
           registrationFile {
             id
             agentId
@@ -258,6 +327,193 @@ export class SubgraphClient {
             mcpVersion
             a2aEndpoint
             a2aVersion
+            webEndpoint
+            emailEndpoint
+            hasOASF
+            oasfSkills
+            oasfDomains
+            ens
+            did
+            mcpTools
+            mcpPrompts
+            mcpResources
+            a2aSkills
+          }
+        }
+      }
+    `;
+
+    const variables = {
+      where: opts.where ?? null,
+      first: opts.first,
+      skip: opts.skip,
+      orderBy: opts.orderBy,
+      orderDirection: opts.orderDirection,
+    };
+
+    try {
+      const data = await this.query<{ agents: QueryAgent[] }>(query, variables);
+      return (data.agents || []).map((a) => this._transformAgent(a)) as AgentSummary[];
+    } catch (e) {
+      // Compatibility: some deployments do not support AgentRegistrationFile.hasOASF in the *filter input*.
+      // When that happens, retry by translating registrationFile_.hasOASF => oasfEndpoint existence checks.
+      const msg = e instanceof Error ? e.message : String(e);
+      const mentionsHasOASF =
+        msg.includes('hasOASF') &&
+        (msg.includes('AgentRegistrationFile') || msg.includes('AgentRegistrationFile_filter') || msg.includes('AgentRegistrationFileFilter'));
+      if (mentionsHasOASF && variables.where) {
+        const rewrite = (node: any): any => {
+          if (Array.isArray(node)) return node.map(rewrite);
+          if (!node || typeof node !== 'object') return node;
+          const out: any = {};
+          for (const [k, v] of Object.entries(node)) {
+            if (k === 'registrationFile_' && v && typeof v === 'object') {
+              const rf: any = { ...(v as any) };
+              if (Object.prototype.hasOwnProperty.call(rf, 'hasOASF')) {
+                const want = Boolean((rf as any).hasOASF);
+                delete rf.hasOASF;
+                // Best-effort fallback: older subgraphs commonly have `oasfEndpoint`.
+                if (want) rf.oasfEndpoint_not = null;
+                else rf.oasfEndpoint = null;
+              }
+              out[k] = rewrite(rf);
+            } else {
+              out[k] = rewrite(v);
+            }
+          }
+          return out;
+        };
+
+        const variables2 = { ...variables, where: rewrite(variables.where) };
+        const data2 = await this.query<{ agents: QueryAgent[] }>(query, variables2);
+        return (data2.agents || []).map((a) => this._transformAgent(a)) as AgentSummary[];
+      }
+      throw e;
+    }
+  }
+
+  async queryAgentMetadata(where: Record<string, unknown>, first: number, skip: number): Promise<QueryAgentMetadata[]> {
+    const query = `
+      query AgentMetadatas($where: AgentMetadata_filter, $first: Int!, $skip: Int!) {
+        agentMetadatas(where: $where, first: $first, skip: $skip) {
+          id
+          key
+          value
+          updatedAt
+          agent { id }
+        }
+      }
+    `;
+    try {
+      const data = await this.query<{ agentMetadatas: QueryAgentMetadata[] }>(query, { where, first, skip });
+      return data.agentMetadatas || [];
+    } catch (e) {
+      // Hosted subgraph compatibility: some deployments expose AgentMetadata list as `agentMetadata_collection`
+      // instead of `agentMetadatas`.
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes('no field `agentMetadatas`') || msg.includes('Cannot query field "agentMetadatas"')) {
+        const q2 = `
+          query AgentMetadataCollection($where: AgentMetadata_filter, $first: Int!, $skip: Int!) {
+            agentMetadata_collection(where: $where, first: $first, skip: $skip) {
+              id
+              key
+              value
+              updatedAt
+              agent { id }
+            }
+          }
+        `;
+        const data2 = await this.query<{ agentMetadata_collection: QueryAgentMetadata[] }>(q2, { where, first, skip });
+        return data2.agentMetadata_collection || [];
+      }
+      throw e;
+    }
+  }
+
+  async queryFeedbacks(
+    where: Record<string, unknown>,
+    first: number,
+    skip: number,
+    orderBy: string = 'createdAt',
+    orderDirection: 'asc' | 'desc' = 'desc'
+  ): Promise<QueryFeedback[]> {
+    const query = `
+      query Feedbacks($where: Feedback_filter, $first: Int!, $skip: Int!, $orderBy: Feedback_orderBy!, $orderDirection: OrderDirection!) {
+        feedbacks(where: $where, first: $first, skip: $skip, orderBy: $orderBy, orderDirection: $orderDirection) {
+          id
+          agent { id }
+          clientAddress
+          value
+          tag1
+          tag2
+          endpoint
+          isRevoked
+          createdAt
+          responses(first: 1) { id }
+        }
+      }
+    `;
+    const data = await this.query<{ feedbacks: QueryFeedback[] }>(query, {
+      where,
+      first,
+      skip,
+      orderBy,
+      orderDirection,
+    });
+    return data.feedbacks || [];
+  }
+
+  async queryFeedbackResponses(where: Record<string, unknown>, first: number, skip: number): Promise<QueryFeedbackResponse[]> {
+    const query = `
+      query FeedbackResponses($where: FeedbackResponse_filter, $first: Int!, $skip: Int!) {
+        feedbackResponses(where: $where, first: $first, skip: $skip) {
+          id
+          feedback { id }
+          createdAt
+        }
+      }
+    `;
+    const data = await this.query<{ feedbackResponses: QueryFeedbackResponse[] }>(query, { where, first, skip });
+    return data.feedbackResponses || [];
+  }
+
+  /**
+   * Get a single agent by ID
+   */
+  async getAgentById(agentId: string): Promise<AgentSummary | null> {
+    const query = `
+      query GetAgent($agentId: String!) {
+        agent(id: $agentId) {
+          id
+          chainId
+          agentId
+          owner
+          operators
+          agentURI
+          agentURIType
+          agentWallet
+          createdAt
+          updatedAt
+          totalFeedback
+          lastActivity
+          registrationFile {
+            id
+            agentId
+            name
+            description
+            image
+            active
+            x402Support
+            supportedTrusts
+            mcpEndpoint
+            mcpVersion
+            a2aEndpoint
+            a2aVersion
+            webEndpoint
+            emailEndpoint
+            oasfSkills
+            oasfDomains
+            hasOASF
             ens
             did
             mcpTools
@@ -306,8 +562,10 @@ export class SubgraphClient {
       description: regFile?.description || '',
       owners: agent.owner ? [normalizeAddress(agent.owner)] : [],
       operators,
-      mcp: !!regFile?.mcpEndpoint,
-      a2a: !!regFile?.a2aEndpoint,
+      mcp: regFile?.mcpEndpoint || undefined,
+      a2a: regFile?.a2aEndpoint || undefined,
+      web: regFile?.webEndpoint || undefined,
+      email: regFile?.emailEndpoint || undefined,
       ens: regFile?.ens || undefined,
       did: regFile?.did || undefined,
       walletAddress: agent.agentWallet ? normalizeAddress(agent.agentWallet) : undefined,
@@ -316,8 +574,16 @@ export class SubgraphClient {
       mcpTools: regFile?.mcpTools || [],
       mcpPrompts: regFile?.mcpPrompts || [],
       mcpResources: regFile?.mcpResources || [],
+      oasfSkills: regFile?.oasfSkills || [],
+      oasfDomains: regFile?.oasfDomains || [],
       active: regFile?.active ?? false,
       x402support: regFile?.x402Support ?? regFile?.x402support ?? false,
+      createdAt: agent.createdAt ? Number(agent.createdAt) : undefined,
+      updatedAt: agent.updatedAt ? Number(agent.updatedAt) : undefined,
+      lastActivity: agent.lastActivity ? Number(agent.lastActivity) : undefined,
+      agentURI: agent.agentURI ?? undefined,
+      agentURIType: agent.agentURIType ?? undefined,
+      feedbackCount: agent.totalFeedback ? Number(agent.totalFeedback) : undefined,
       extras: {},
     };
   }
@@ -329,7 +595,7 @@ export class SubgraphClient {
    * @param skip Number of results to skip for pagination (default: 0)
    */
   async searchAgents(
-    params: SearchParams,
+    params: SearchFilters,
     first: number = 100,
     skip: number = 0
   ): Promise<AgentSummary[]> {
@@ -339,22 +605,23 @@ export class SubgraphClient {
 
     // Note: Most search fields are in registrationFile, so we need to filter after fetching
     // For now, we'll do basic filtering on Agent fields and then filter on registrationFile fields
-    if (params.active !== undefined || params.mcp !== undefined || params.a2a !== undefined ||
-        params.x402support !== undefined || params.ens || params.walletAddress ||
+    // NOTE: This legacy method is retained temporarily; the new unified search uses a v2 query builder.
+    if (params.active !== undefined || params.hasMCP !== undefined || params.hasA2A !== undefined ||
+        params.x402support !== undefined || params.ensContains || params.walletAddress ||
         params.supportedTrust || params.a2aSkills || params.mcpTools || params.name ||
         params.owners || params.operators) {
       // Push basic filters to subgraph using nested registrationFile filters
       const registrationFileFilters: Record<string, unknown> = {};
       if (params.active !== undefined) registrationFileFilters.active = params.active;
       if (params.x402support !== undefined) registrationFileFilters.x402Support = params.x402support;
-      if (params.ens) registrationFileFilters.ens = params.ens.toLowerCase();
+      if (params.ensContains) registrationFileFilters.ens_contains_nocase = params.ensContains;
       // agentWallet is stored on the Agent entity (not registrationFile) in the current subgraph schema
       // so we can't push this filter into registrationFile_ here.
-      if (params.mcp !== undefined) {
-        registrationFileFilters[params.mcp ? 'mcpEndpoint_not' : 'mcpEndpoint'] = null;
+      if (params.hasMCP !== undefined) {
+        registrationFileFilters[params.hasMCP ? 'mcpEndpoint_not' : 'mcpEndpoint'] = null;
       }
-      if (params.a2a !== undefined) {
-        registrationFileFilters[params.a2a ? 'a2aEndpoint_not' : 'a2aEndpoint'] = null;
+      if (params.hasA2A !== undefined) {
+        registrationFileFilters[params.hasA2A ? 'a2aEndpoint_not' : 'a2aEndpoint'] = null;
       }
 
       const whereWithFilters: Record<string, unknown> = {};
@@ -604,209 +871,9 @@ export class SubgraphClient {
   }
 
   /**
-   * Search agents filtered by reputation criteria
+   * (Removed) searchAgentsByReputation
+   *
+   * Unified search lives in `SDK.searchAgents()` with `filters.feedback` and related filter surfaces.
    */
-  async searchAgentsByReputation(
-    agents?: string[],
-    tags?: string[],
-    reviewers?: string[],
-    capabilities?: string[],
-    skills?: string[],
-    tasks?: string[],
-    names?: string[],
-    minAverageValue?: number,
-    includeRevoked: boolean = false,
-    first: number = 100,
-    skip: number = 0,
-    orderBy: string = 'createdAt',
-    orderDirection: 'asc' | 'desc' = 'desc'
-  ): Promise<Array<QueryAgent & { averageValue?: number | null }>> {
-    // Build feedback filters
-    const feedbackFilters: string[] = [];
-
-    if (!includeRevoked) {
-      feedbackFilters.push('isRevoked: false');
-    }
-
-    if (tags && tags.length > 0) {
-      const tagFilterItems: string[] = [];
-      for (const tag of tags) {
-        tagFilterItems.push(`{or: [{tag1: "${tag}"}, {tag2: "${tag}"}]}`);
-      }
-      feedbackFilters.push(`or: [${tagFilterItems.join(', ')}]`);
-    }
-
-    if (reviewers && reviewers.length > 0) {
-      const reviewersList = reviewers.map((addr) => `"${addr}"`).join(', ');
-      feedbackFilters.push(`clientAddress_in: [${reviewersList}]`);
-    }
-
-    // Breaking change (1.4.0 / spec-only): legacy flat feedback file fields are not indexed.
-    // The current subgraph schema does not expose FeedbackFile.{capability,skill,task,context,name}.
-    // We therefore do not apply these filters at the subgraph level.
-
-    // If we have feedback filters, first query feedback to get agent IDs
-    let agentWhere = '';
-    if (tags || reviewers) {
-      const feedbackWhere = feedbackFilters.length > 0 
-        ? `{ ${feedbackFilters.join(', ')} }`
-        : '{}';
-
-      const feedbackQuery = `
-        {
-          feedbacks(
-            where: ${feedbackWhere}
-            first: 1000
-            skip: 0
-          ) {
-            agent {
-              id
-            }
-          }
-        }
-      `;
-
-      try {
-        const feedbackResult = await this.query<{ feedbacks: Array<{ agent: { id: string } | null }> }>(feedbackQuery);
-        const feedbacksData = feedbackResult.feedbacks || [];
-
-        // Extract unique agent IDs
-        const agentIdsSet = new Set<string>();
-        for (const fb of feedbacksData) {
-          const agentId = fb.agent?.id;
-          if (agentId) {
-            agentIdsSet.add(agentId);
-          }
-        }
-
-        if (agentIdsSet.size === 0) {
-          // No agents have matching feedback
-          return [];
-        }
-
-        // Apply agent filter if specified
-        let agentIdsList = Array.from(agentIdsSet);
-        if (agents && agents.length > 0) {
-          agentIdsList = agentIdsList.filter((aid) => agents.includes(aid));
-          if (agentIdsList.length === 0) {
-            return [];
-          }
-        }
-
-        const agentIdsStr = agentIdsList.map((aid) => `"${aid}"`).join(', ');
-        agentWhere = `where: { id_in: [${agentIdsStr}] }`;
-      } catch (error) {
-        // If feedback query fails, return empty
-        return [];
-      }
-    } else {
-      // No feedback filters - query agents directly
-      const agentFilters: string[] = [];
-      if (agents && agents.length > 0) {
-        const agentIds = agents.map((aid) => `"${aid}"`).join(', ');
-        agentFilters.push(`id_in: [${agentIds}]`);
-      }
-
-      if (agentFilters.length > 0) {
-        agentWhere = `where: { ${agentFilters.join(', ')} }`;
-      }
-    }
-
-    // Build feedback where for agent query (to calculate values)
-    const feedbackWhereForAgents = feedbackFilters.length > 0
-      ? `{ ${feedbackFilters.join(', ')} }`
-      : '{}';
-
-    const query = `
-      {
-        agents(
-          ${agentWhere}
-          first: ${first}
-          skip: ${skip}
-          orderBy: ${orderBy}
-          orderDirection: ${orderDirection}
-        ) {
-          id
-          chainId
-          agentId
-          agentURI
-          agentURIType
-          agentWallet
-          owner
-          operators
-          createdAt
-          updatedAt
-          totalFeedback
-          lastActivity
-          registrationFile {
-            id
-            name
-            description
-            image
-            active
-            x402Support
-            supportedTrusts
-            mcpEndpoint
-            mcpVersion
-            a2aEndpoint
-            a2aVersion
-            ens
-            did
-            mcpTools
-            mcpPrompts
-            mcpResources
-            a2aSkills
-            createdAt
-          }
-          feedback(where: ${feedbackWhereForAgents}) {
-            value
-            isRevoked
-          }
-        }
-      }
-    `;
-
-    try {
-      const result = await this.query<{
-        agents: Array<QueryAgent & { feedback: Array<{ value: number; isRevoked: boolean }> }>;
-      }>(query);
-      const agentsResult = result.agents || [];
-
-      // Calculate average values
-      const agentsWithScores = agentsResult.map((agent) => {
-        const feedbacks = agent.feedback || [];
-        let averageValue: number | null = null;
-        
-        if (feedbacks.length > 0) {
-          const values = feedbacks
-            .filter((fb) => fb.value !== null && fb.value !== undefined)
-            .map((fb) => fb.value);
-          
-          if (values.length > 0) {
-            averageValue = values.reduce((sum, v) => sum + v, 0) / values.length;
-          }
-        }
-
-        // Remove feedback array from result (not part of QueryAgent)
-        const { feedback, ...agentData } = agent;
-        return {
-          ...agentData,
-          averageValue,
-        };
-      });
-
-      // Filter by minAverageValue
-      let filteredAgents = agentsWithScores;
-      if (minAverageValue !== undefined) {
-        filteredAgents = agentsWithScores.filter(
-          (agent) => agent.averageValue !== null && agent.averageValue >= minAverageValue
-        );
-      }
-
-      return filteredAgents;
-    } catch (error) {
-      throw new Error(`Subgraph reputation search failed: ${error}`);
-    }
-  }
 }
 

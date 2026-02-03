@@ -25,7 +25,7 @@ async function main() {
 
   // 2. Search agents with MCP endpoint
   console.log('\nSearching agents with MCP endpoint...');
-  const mcpResults = await sdk.searchAgents({ mcp: true });
+  const mcpResults = await sdk.searchAgents({ hasMCP: true });
   console.log(`Found ${mcpResults.items.length} agents with MCP`);
 
   // 3. Search agents with specific tools
@@ -40,14 +40,13 @@ async function main() {
     console.log(`    Tools: ${agent.mcpTools.join(', ')}`);
   }
 
-  // 4. Search agents by reputation
-  console.log('\nSearching agents by reputation...');
-  const reputationResults = await sdk.searchAgentsByReputation({
-    tags: ['data_analyst', 'finance'],
-    minAverageValue: 80,
+  // 4. Search agents by feedback (unified search)
+  console.log('\nSearching agents by feedback (min average value)...');
+  const feedbackResults = await sdk.searchAgents({
+    feedback: { minValue: 80, includeRevoked: false },
   });
-  console.log(`Found ${reputationResults.items.length} agents with high reputation`);
-  // Note: averageValue is available in agent.extras.averageValue
+  console.log(`Found ${feedbackResults.items.length} agents with high average feedback value`);
+  // Note: averageValue is available in agent.averageValue
 
   // 5. Get specific agent by ID
   console.log('\nGetting specific agent...');
@@ -59,8 +58,8 @@ async function main() {
     } else {
       console.log(`Agent: ${agent.name}`);
       console.log(`Description: ${agent.description}`);
-      console.log(`MCP: ${agent.mcp ? 'Yes' : 'No'}`);
-      console.log(`A2A: ${agent.a2a ? 'Yes' : 'No'}`);
+      console.log(`MCP: ${agent.mcp ?? 'No'}`);
+      console.log(`A2A: ${agent.a2a ?? 'No'}`);
       console.log(`Active: ${agent.active}`);
       console.log(`x402 Support: ${agent.x402support}`);
     }

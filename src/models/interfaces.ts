@@ -46,8 +46,14 @@ export interface AgentSummary {
   description: string;
   owners: Address[];
   operators: Address[];
-  mcp: boolean;
-  a2a: boolean;
+  /**
+   * Endpoint strings (new unified search + Jan 2026 schema).
+   * Present when the agent's registration file advertises the endpoint.
+   */
+  mcp?: string;
+  a2a?: string;
+  web?: string;
+  email?: string;
   ens?: string;
   did?: string;
   walletAddress?: Address;
@@ -56,8 +62,25 @@ export interface AgentSummary {
   mcpTools: string[];
   mcpPrompts: string[];
   mcpResources: string[];
+  oasfSkills: string[];
+  oasfDomains: string[];
   active: boolean;
   x402support: boolean;
+  /**
+   * New optional top-level fields (preferred over putting these into extras).
+   */
+  createdAt?: number; // unix seconds
+  updatedAt?: number; // unix seconds
+  lastActivity?: number; // unix seconds
+  agentURI?: string;
+  agentURIType?: string;
+  feedbackCount?: number;
+  averageValue?: number;
+  semanticScore?: number;
+
+  /**
+   * Reserved for experimental fields.
+   */
   extras: Record<string, any>;
 }
 
@@ -132,24 +155,81 @@ export type FeedbackId = string;
 /**
  * Parameters for agent search
  */
-export interface SearchParams {
-  chains?: number[] | 'all'; // ChainId[] or 'all' to search all configured chains
-  name?: string; // case-insensitive substring
-  description?: string; // semantic; vector distance < threshold
+export interface FeedbackFilters {
+  hasFeedback?: boolean;
+  hasNoFeedback?: boolean;
+  includeRevoked?: boolean;
+  minValue?: number;
+  maxValue?: number;
+  minCount?: number;
+  maxCount?: number;
+  fromReviewers?: Address[];
+  endpoint?: string; // substring match
+  hasResponse?: boolean;
+  tag1?: string;
+  tag2?: string;
+  tag?: string; // matches tag1 OR tag2
+}
+
+export interface SearchFilters {
+  // Chain / identity
+  chains?: number[] | 'all';
+  agentIds?: AgentId[];
+
+  // Text
+  name?: string; // substring
+  description?: string; // substring
+
+  // Owners / operators
   owners?: Address[];
   operators?: Address[];
-  mcp?: boolean;
-  a2a?: boolean;
-  ens?: string; // exact, case-insensitive
-  did?: string; // exact
+
+  // Endpoint existence
+  hasRegistrationFile?: boolean;
+  hasWeb?: boolean;
+  hasMCP?: boolean;
+  hasA2A?: boolean;
+  hasOASF?: boolean;
+  hasEndpoints?: boolean;
+
+  // Endpoint substring contains
+  webContains?: string;
+  mcpContains?: string;
+  a2aContains?: string;
+  ensContains?: string;
+  didContains?: string;
+
+  // Wallet
   walletAddress?: Address;
+
+  // Capability arrays (ANY semantics)
   supportedTrust?: string[];
   a2aSkills?: string[];
   mcpTools?: string[];
   mcpPrompts?: string[];
   mcpResources?: string[];
+  oasfSkills?: string[];
+  oasfDomains?: string[];
+
+  // Status
   active?: boolean;
   x402support?: boolean;
+
+  // Time filters (developer friendly; SDK normalizes to unix seconds)
+  registeredAtFrom?: Date | string | number;
+  registeredAtTo?: Date | string | number;
+  updatedAtFrom?: Date | string | number;
+  updatedAtTo?: Date | string | number;
+
+  // Metadata filters (two-phase)
+  hasMetadataKey?: string;
+  metadataValue?: { key: string; value: string };
+
+  // Semantic search
+  keyword?: string;
+
+  // Feedback filters (two-phase)
+  feedback?: FeedbackFilters;
 }
 
 /**
@@ -159,27 +239,15 @@ export interface SearchOptions {
   sort?: string[];
   pageSize?: number;
   cursor?: string;
+  semanticMinScore?: number;
+  semanticTopK?: number;
 }
 
 /**
  * Filters for reputation-based agent search.
  * (Matches the criteria portion of the Jan 2026 SDK search API; excludes paging/sort/chains.)
  */
-export interface ReputationSearchFilters {
-  agents?: AgentId[];
-  tags?: string[];
-  reviewers?: Address[];
-  capabilities?: string[];
-  skills?: string[];
-  tasks?: string[];
-  names?: string[];
-  minAverageValue?: number;
-}
-
-export interface ReputationSearchOptions extends SearchOptions {
-  includeRevoked?: boolean;
-  chains?: number[] | 'all';
-}
+// Note: `searchAgentsByReputation` has been removed in favor of unified `searchAgents()`.
 
 /**
  * Parameters for feedback search

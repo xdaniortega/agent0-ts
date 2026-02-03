@@ -4,9 +4,13 @@
  */
 
 import { SDK } from '../src/index';
-import { CHAIN_ID, RPC_URL, AGENT_ID, printConfig } from './config';
+import { CHAIN_ID, RPC_URL, printConfig } from './config';
 
-describe('Agent Search and Discovery', () => {
+// Live/integration test (subgraph). Opt-in to avoid flaky CI.
+const RUN_LIVE_TESTS = process.env.RUN_LIVE_TESTS === '1';
+const describeMaybe = RUN_LIVE_TESTS ? describe : describe.skip;
+
+describeMaybe('Agent Search and Discovery (live)', () => {
   let sdk: SDK;
 
   beforeAll(() => {
@@ -42,7 +46,7 @@ describe('Agent Search and Discovery', () => {
 
   it('should search agents by name', async () => {
     const results = await sdk.searchAgents({ name: 'Test' });
-    expect(results.items.length).toBeGreaterThanOrEqual(0);
+    expect(results.items).toBeTruthy();
 
     if (results.items.length > 0) {
       const firstAgent = results.items[0];
@@ -52,18 +56,18 @@ describe('Agent Search and Discovery', () => {
   });
 
   it('should search agents with MCP endpoint', async () => {
-    const results = await sdk.searchAgents({ mcp: true });
-    expect(results.items.length).toBeGreaterThanOrEqual(0);
+    const results = await sdk.searchAgents({ hasMCP: true });
+    expect(results.items).toBeTruthy();
 
     results.items.forEach((agent) => {
-      // AgentSummary has mcp as boolean
-      expect(typeof agent.mcp === 'boolean').toBe(true);
+      // AgentSummary has mcp as an endpoint string when present
+      expect(typeof agent.mcp).toBe('string');
     });
   });
 
   it('should search agents by MCP tools', async () => {
     const results = await sdk.searchAgents({ mcpTools: ['data_analysis'] });
-    expect(results.items.length).toBeGreaterThanOrEqual(0);
+    expect(results.items).toBeTruthy();
 
     if (results.items.length > 0) {
       const firstAgent = results.items[0];
@@ -73,7 +77,7 @@ describe('Agent Search and Discovery', () => {
 
   it('should search agents by A2A skills', async () => {
     const results = await sdk.searchAgents({ a2aSkills: ['javascript'] });
-    expect(results.items.length).toBeGreaterThanOrEqual(0);
+    expect(results.items).toBeTruthy();
 
     if (results.items.length > 0) {
       const firstAgent = results.items[0];
@@ -82,13 +86,13 @@ describe('Agent Search and Discovery', () => {
   });
 
   it('should search agents by ENS domain', async () => {
-    const results = await sdk.searchAgents({ ens: 'test' });
-    expect(results.items.length).toBeGreaterThanOrEqual(0);
+    const results = await sdk.searchAgents({ ensContains: 'test' });
+    expect(results.items).toBeTruthy();
   });
 
   it('should search only active agents', async () => {
     const results = await sdk.searchAgents({ active: true }, { pageSize: 10 });
-    expect(results.items.length).toBeGreaterThanOrEqual(0);
+    expect(results.items).toBeTruthy();
 
     results.items.forEach((agent) => {
       // AgentSummary active is a boolean property
@@ -104,12 +108,12 @@ describe('Agent Search and Discovery', () => {
       mcpTools: ['communication'],
       a2aSkills: ['python'],
     });
-    expect(results.items.length).toBeGreaterThanOrEqual(0);
+    expect(results.items).toBeTruthy();
   });
 
   it('should search agents by reputation', async () => {
-    const results = await sdk.searchAgentsByReputation({ minAverageValue: 80 });
-    expect(results.items.length).toBeGreaterThanOrEqual(0);
+    const results = await sdk.searchAgents({ feedback: { minValue: 80 } });
+    expect(results.items).toBeTruthy();
   });
 
   it('should handle pagination', async () => {
@@ -118,7 +122,7 @@ describe('Agent Search and Discovery', () => {
 
     if (page1.nextCursor && page1.items.length > 0) {
       const page2 = await sdk.searchAgents({ active: true }, { pageSize: 5, cursor: page1.nextCursor });
-      expect(page2.items.length).toBeGreaterThanOrEqual(0);
+      expect(page2.items).toBeTruthy();
 
       // Verify no duplicates between pages (only if we have results)
       if (page1.items.length > 0 && page2.items.length > 0) {

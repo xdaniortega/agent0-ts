@@ -3,9 +3,10 @@
  * Simplified version focused on subgraph queries (no local ML indexing)
  */
 
-import type { AgentSummary, SearchParams, SearchResultMeta } from '../models/interfaces.js';
+import type { AgentSummary, SearchFilters, SearchOptions, SearchResultMeta } from '../models/interfaces.js';
 import type { AgentId, ChainId } from '../models/types.js';
 import { SubgraphClient } from './subgraph-client.js';
+import { SemanticSearchClient } from './semantic-search-client.js';
 import { normalizeAddress } from '../utils/validation.js';
 import { DEFAULT_SUBGRAPH_URLS } from './contracts.js';
 
@@ -16,7 +17,8 @@ import { DEFAULT_SUBGRAPH_URLS } from './contracts.js';
 export class AgentIndexer {
   constructor(
     private subgraphClient?: SubgraphClient,
-    private subgraphUrlOverrides?: Record<ChainId, string>
+    private subgraphUrlOverrides?: Record<ChainId, string>,
+    private readonly defaultChainId?: ChainId
   ) {}
 
   /**
@@ -40,86 +42,636 @@ export class AgentIndexer {
    * Search agents with filters
    */
   async searchAgents(
-    params: SearchParams = {},
-    pageSize: number = 50,
-    cursor?: string,
-    sort: string[] = []
+    params: SearchFilters = {},
+    options: SearchOptions = {}
   ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta?: SearchResultMeta }> {
-    // Ensure params is always an object
-    const searchParams: SearchParams = params || {};
+    const startTime = Date.now();
+    const pageSize = options.pageSize ?? 50;
+    const filters: SearchFilters = params || {};
 
-    // Handle "all" chains shorthand
-    if (searchParams.chains === 'all') {
-      searchParams.chains = this._getAllConfiguredChains();
+    if (filters.keyword && filters.keyword.trim()) {
+      const out = await this._searchUnifiedWithKeyword(filters, options);
+      const totalMs = Date.now() - startTime;
+      return { ...out, meta: { ...(out.meta || ({} as any)), timing: { totalMs } } };
     }
 
-    // If chains are explicitly specified (even a single chain), use multi-chain path
-    if (searchParams.chains && Array.isArray(searchParams.chains) && searchParams.chains.length > 0) {
-      // Validate chains are configured
-      const availableChains = new Set(this._getAllConfiguredChains());
-      const requestedChains = new Set(searchParams.chains);
-      const invalidChains = [...requestedChains].filter(c => !availableChains.has(c));
+    const out = await this._searchUnifiedNoKeyword(filters, options);
+    const totalMs = Date.now() - startTime;
+    return { ...out, meta: { ...(out.meta || ({} as any)), timing: { totalMs } } };
+  }
 
-      if (invalidChains.length > 0) {
-        // Filter to valid chains only
-        const validChains = searchParams.chains.filter(c => availableChains.has(c));
-        if (validChains.length === 0) {
-          return {
-            items: [],
-            nextCursor: undefined,
-            meta: {
-              chains: searchParams.chains,
-              successfulChains: [],
-              failedChains: searchParams.chains,
-              totalResults: 0,
-              timing: { totalMs: 0 },
-            },
-          };
+  private _parseSort(sort: string[] | undefined, keywordPresent: boolean): { field: string; direction: 'asc' | 'desc' } {
+    const defaultSpec = keywordPresent ? 'semanticScore:desc' : 'updatedAt:desc';
+    const spec = (sort && sort.length > 0 ? sort[0] : defaultSpec) || defaultSpec;
+    const [fieldRaw, dirRaw] = spec.split(':', 2);
+    const field = (fieldRaw || (keywordPresent ? 'semanticScore' : 'updatedAt')).trim();
+    const direction = (dirRaw || 'desc').trim().toLowerCase() === 'asc' ? 'asc' : 'desc';
+    return { field, direction };
+  }
+
+  private _resolveChains(filters: SearchFilters, keywordPresent: boolean): ChainId[] {
+    if (filters.chains === 'all') return this._getAllConfiguredChains();
+    if (Array.isArray(filters.chains) && filters.chains.length > 0) return filters.chains;
+    if (keywordPresent) return this._getAllConfiguredChains();
+    if (this.defaultChainId !== undefined) return [this.defaultChainId];
+    return [];
+  }
+
+  private _parseCursorOffset(cursor?: string): number {
+    if (!cursor) return 0;
+    const n = parseInt(cursor, 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  }
+
+  private _parsePerChainCursor(chains: ChainId[], cursor?: string): Record<number, number> {
+    const out: Record<number, number> = {};
+    for (const c of chains) out[c] = 0;
+    if (!cursor) return out;
+    try {
+      const parsed = JSON.parse(cursor);
+      if (parsed && typeof parsed === 'object') {
+        for (const c of chains) {
+          const v = (parsed as any)[String(c)];
+          if (typeof v === 'number' && Number.isFinite(v) && v >= 0) out[c] = v;
         }
-        searchParams.chains = validChains;
+        return out;
       }
+    } catch {
+      // fallthrough
+    }
+    // Back-compat: treat numeric cursor as a global offset for single-chain only.
+    const n = parseInt(cursor, 10);
+    if (chains.length === 1 && Number.isFinite(n) && n >= 0) out[chains[0]] = n;
+    return out;
+  }
 
-      // Use multi-chain search if multiple chains or single chain different from default
-      if (searchParams.chains.length > 1) {
-        return this._searchAgentsAcrossChains(searchParams, sort, pageSize, cursor);
+  private _encodePerChainCursor(skips: Record<number, number>): string {
+    const sortedKeys = Object.keys(skips).sort((a, b) => Number(a) - Number(b));
+    const obj: Record<string, number> = {};
+    for (const k of sortedKeys) obj[k] = skips[Number(k)] ?? 0;
+    return JSON.stringify(obj);
+  }
+
+  private _normalizeAgentIds(filters: SearchFilters, chains: ChainId[]): Record<number, string[]> | undefined {
+    const ids = filters.agentIds;
+    if (!ids || ids.length === 0) return undefined;
+    const byChain: Record<number, string[]> = {};
+    for (const id of ids) {
+      const s = String(id);
+      if (s.includes(':')) {
+        const [chainStr] = s.split(':', 1);
+        const chainId = Number(chainStr);
+        if (!Number.isFinite(chainId)) continue;
+        (byChain[chainId] ||= []).push(s);
+      } else {
+        if (chains.length !== 1) {
+          throw new Error('agentIds without chain prefix are only allowed when searching exactly one chain.');
+        }
+        (byChain[chains[0]] ||= []).push(`${chains[0]}:${s}`);
+      }
+    }
+    return byChain;
+  }
+
+  private _toUnixSeconds(input: Date | string | number): number {
+    if (input instanceof Date) return Math.floor(input.getTime() / 1000);
+    if (typeof input === 'number') return Math.floor(input);
+    const s = String(input).trim();
+    const hasTz = /[zZ]|[+-]\d{2}:\d{2}$/.test(s);
+    const normalized = hasTz ? s : `${s}Z`;
+    const ms = Date.parse(normalized);
+    if (!Number.isFinite(ms)) throw new Error(`Invalid date: ${input}`);
+    return Math.floor(ms / 1000);
+  }
+
+  private _buildWhereV2(filters: SearchFilters, idsForChain?: string[]): Record<string, unknown> {
+    const and: any[] = [];
+    const base: any = {};
+
+    // Default behavior: only agents with registration files.
+    if (filters.hasRegistrationFile === false) {
+      base.registrationFile = null;
+    } else {
+      base.registrationFile_not = null;
+    }
+
+    if (idsForChain && idsForChain.length > 0) {
+      base.id_in = idsForChain;
+    }
+
+    if (filters.walletAddress) {
+      base.agentWallet = filters.walletAddress.toLowerCase();
+    }
+
+    // Feedback existence filters can be pushed down via Agent.totalFeedback when they are the ONLY feedback constraint.
+    const fb = filters.feedback;
+    if (fb && (fb.hasFeedback || fb.hasNoFeedback)) {
+      const hasThreshold =
+        fb.minCount !== undefined || fb.maxCount !== undefined || fb.minValue !== undefined || fb.maxValue !== undefined;
+      const hasAnyConstraint =
+        fb.hasResponse === true ||
+        (fb.fromReviewers?.length ?? 0) > 0 ||
+        Boolean(fb.endpoint) ||
+        Boolean(fb.tag) ||
+        Boolean(fb.tag1) ||
+        Boolean(fb.tag2);
+      if (!hasThreshold && !hasAnyConstraint) {
+        if (fb.hasFeedback) base.totalFeedback_gt = '0';
+        if (fb.hasNoFeedback) base.totalFeedback = '0';
       }
     }
 
-    // Single-chain search (existing logic)
-    if (!this.subgraphClient) {
-      throw new Error('Subgraph client required for agent search');
+    if (filters.owners && filters.owners.length > 0) {
+      const owners = filters.owners.map((o) => o.toLowerCase());
+      base.owner_in = owners;
     }
 
-    // Parse cursor for pagination
-    const skip = cursor ? parseInt(cursor, 10) : 0;
+    if (filters.operators && filters.operators.length > 0) {
+      const ops = filters.operators.map((o) => o.toLowerCase());
+      and.push({ or: ops.map((op) => ({ operators_contains: [op] })) });
+    }
 
-    // Use subgraph search which pushes filters and pagination to subgraph level (much more efficient)
-    // Fetch one extra record to check if there's a next page
-    let agents = await this.subgraphClient.searchAgents(searchParams, pageSize + 1, skip);
-    
-    // Apply any remaining client-side filtering (for complex filters like array contains)
-    agents = this._filterAgents(agents, searchParams);
+    if (filters.registeredAtFrom !== undefined) base.createdAt_gte = this._toUnixSeconds(filters.registeredAtFrom as any);
+    if (filters.registeredAtTo !== undefined) base.createdAt_lte = this._toUnixSeconds(filters.registeredAtTo as any);
+    if (filters.updatedAtFrom !== undefined) base.updatedAt_gte = this._toUnixSeconds(filters.updatedAtFrom as any);
+    if (filters.updatedAtTo !== undefined) base.updatedAt_lte = this._toUnixSeconds(filters.updatedAtTo as any);
 
-    // Check if there are more results (we fetched pageSize + 1)
-    const hasMore = agents.length > pageSize;
-    const paginatedAgents = hasMore ? agents.slice(0, pageSize) : agents;
+    const rf: any = {};
+    if (filters.name) rf.name_contains_nocase = filters.name;
+    if (filters.description) rf.description_contains_nocase = filters.description;
+    if (filters.ensContains) rf.ens_contains_nocase = filters.ensContains;
+    if (filters.didContains) rf.did_contains_nocase = filters.didContains;
+    if (filters.active !== undefined) rf.active = filters.active;
+    if (filters.x402support !== undefined) rf.x402Support = filters.x402support;
 
-    // Return next cursor if we have more results
-    const nextCursor = hasMore ? String(skip + pageSize) : undefined;
+    if (filters.hasMCP !== undefined) rf[filters.hasMCP ? 'mcpEndpoint_not' : 'mcpEndpoint'] = null;
+    if (filters.hasA2A !== undefined) rf[filters.hasA2A ? 'a2aEndpoint_not' : 'a2aEndpoint'] = null;
+    if (filters.hasWeb !== undefined) rf[filters.hasWeb ? 'webEndpoint_not' : 'webEndpoint'] = null;
+    // Exact semantics: true iff (oasfSkills OR oasfDomains) non-empty. Implemented by subgraph derived field.
+    if (filters.hasOASF !== undefined) rf.hasOASF = filters.hasOASF;
+
+    if (filters.mcpContains) rf.mcpEndpoint_contains_nocase = filters.mcpContains;
+    if (filters.a2aContains) rf.a2aEndpoint_contains_nocase = filters.a2aContains;
+    if (filters.webContains) rf.webEndpoint_contains_nocase = filters.webContains;
+
+    if (Object.keys(rf).length > 0) {
+      base.registrationFile_ = rf;
+    }
+
+    const anyOfList = (field: string, values?: string[]) => {
+      if (!values || values.length === 0) return;
+      and.push({
+        or: values.map((v) => ({ registrationFile_: { [`${field}_contains`]: [v] } })),
+      });
+    };
+    anyOfList('supportedTrusts', filters.supportedTrust);
+    anyOfList('a2aSkills', filters.a2aSkills);
+    anyOfList('mcpTools', filters.mcpTools);
+    anyOfList('mcpPrompts', filters.mcpPrompts);
+    anyOfList('mcpResources', filters.mcpResources);
+    anyOfList('oasfSkills', filters.oasfSkills);
+    anyOfList('oasfDomains', filters.oasfDomains);
+
+    if (filters.hasEndpoints !== undefined) {
+      if (filters.hasEndpoints) {
+        and.push({
+          or: [
+            { registrationFile_: { webEndpoint_not: null } },
+            { registrationFile_: { mcpEndpoint_not: null } },
+            { registrationFile_: { a2aEndpoint_not: null } },
+          ],
+        });
+      } else {
+        and.push({
+          registrationFile_: { webEndpoint: null, mcpEndpoint: null, a2aEndpoint: null },
+        });
+      }
+    }
+
+    if (and.length === 0) return base;
+    return { and: [base, ...and] };
+  }
+
+  private _compareAgents(a: AgentSummary, b: AgentSummary, field: string, direction: 'asc' | 'desc'): number {
+    const dir = direction === 'asc' ? 1 : -1;
+    const num = (x: any) => (typeof x === 'number' && Number.isFinite(x) ? x : 0);
+    switch (field) {
+      case 'name': {
+        const av = (a.name || '').toLowerCase();
+        const bv = (b.name || '').toLowerCase();
+        return av < bv ? -dir : av > bv ? dir : 0;
+      }
+      case 'chainId':
+        return (a.chainId - b.chainId) * dir;
+      case 'createdAt':
+        return (num(a.createdAt) - num(b.createdAt)) * dir;
+      case 'updatedAt':
+        return (num(a.updatedAt) - num(b.updatedAt)) * dir;
+      case 'lastActivity':
+        return (num(a.lastActivity) - num(b.lastActivity)) * dir;
+      case 'feedbackCount':
+        return (num(a.feedbackCount) - num(b.feedbackCount)) * dir;
+      case 'averageValue':
+        return (num(a.averageValue) - num(b.averageValue)) * dir;
+      case 'semanticScore':
+        return (num(a.semanticScore) - num(b.semanticScore)) * dir;
+      default:
+        return (num(a.updatedAt) - num(b.updatedAt)) * dir;
+    }
+  }
+
+  private _intersectIds(a?: string[], b?: string[]): string[] | undefined {
+    if (!a && !b) return undefined;
+    if (!a) return b && b.length > 0 ? b : [];
+    if (!b) return a && a.length > 0 ? a : [];
+    const bSet = new Set(b);
+    return a.filter((x) => bSet.has(x));
+  }
+
+  private _utf8ToHex(s: string): string {
+    const bytes = new TextEncoder().encode(s);
+    let hex = '0x';
+    for (const b of bytes) hex += b.toString(16).padStart(2, '0');
+    return hex;
+  }
+
+  private async _prefilterByMetadata(filters: SearchFilters, chains: ChainId[]): Promise<Record<number, string[]> | undefined> {
+    const key = filters.hasMetadataKey ?? filters.metadataValue?.key;
+    if (!key) return undefined;
+    const valueStr = filters.metadataValue?.value;
+    const valueHex = valueStr !== undefined ? this._utf8ToHex(String(valueStr)) : undefined;
+
+    const first = 1000;
+    const max = 5000;
+
+    const perChain = await Promise.all(
+      chains.map(async (chainId) => {
+        const client =
+          this.defaultChainId !== undefined && chainId === this.defaultChainId ? this.subgraphClient : this._getSubgraphClientForChain(chainId);
+        if (!client) return { chainId, ids: [] as string[] };
+
+        const ids: string[] = [];
+        for (let skip = 0; skip < max; skip += first) {
+          const where: any = { key };
+          if (valueHex !== undefined) where.value = valueHex;
+          const rows = await client.queryAgentMetadata(where, first, skip);
+          for (const r of rows) {
+            if (r?.agent?.id) ids.push(r.agent.id);
+          }
+          if (rows.length < first) break;
+        }
+        return { chainId, ids: Array.from(new Set(ids)) };
+      })
+    );
+
+    const out: Record<number, string[]> = {};
+    for (const r of perChain) out[r.chainId] = r.ids;
+    return out;
+  }
+
+  private async _prefilterByFeedback(
+    filters: SearchFilters,
+    chains: ChainId[],
+    candidateIdsByChain?: Record<number, string[]>
+  ): Promise<{ idsByChain?: Record<number, string[]>; statsById?: Record<string, { count: number; avg: number }> }> {
+    const fb = filters.feedback;
+    if (!fb) return {};
+
+    const hasThreshold =
+      fb.minCount !== undefined || fb.maxCount !== undefined || fb.minValue !== undefined || fb.maxValue !== undefined;
+    const hasAnyConstraint =
+      fb.hasResponse === true ||
+      (fb.fromReviewers?.length ?? 0) > 0 ||
+      Boolean(fb.endpoint) ||
+      Boolean(fb.tag) ||
+      Boolean(fb.tag1) ||
+      Boolean(fb.tag2);
+
+    const includeRevoked = fb.includeRevoked === true;
+
+    // If hasNoFeedback is the ONLY feedback constraint, we push it down via Agent.totalFeedback == 0 in _buildWhereV2.
+    if (fb.hasNoFeedback && !hasThreshold && !hasAnyConstraint) return {};
+    // If hasFeedback is the ONLY feedback constraint, we push it down via Agent.totalFeedback_gt == 0 in _buildWhereV2.
+    if (fb.hasFeedback && !hasThreshold && !hasAnyConstraint) return {};
+
+    // Otherwise, hasNoFeedback requires a candidate set (we subtract matched agents from candidates).
+    if (fb.hasNoFeedback) {
+      const anyCandidates = candidateIdsByChain && Object.values(candidateIdsByChain).some((l) => (l?.length ?? 0) > 0);
+      if (!anyCandidates) throw new Error('feedback.hasNoFeedback requires a pre-filtered candidate set (e.g. agentIds or keyword).');
+    }
+
+    const first = 1000;
+    const max = 5000;
+
+    const statsById: Record<string, { sum: number; count: number }> = {};
+    const matchedAgentsByChain: Record<number, Set<string>> = {};
+
+    await Promise.all(
+      chains.map(async (chainId) => {
+        const client =
+          this.defaultChainId !== undefined && chainId === this.defaultChainId ? this.subgraphClient : this._getSubgraphClientForChain(chainId);
+        if (!client) return;
+
+        const candidates = candidateIdsByChain?.[chainId];
+        const baseAnd: any[] = [];
+        const base: any = {};
+        if (!includeRevoked) base.isRevoked = false;
+        if (fb.fromReviewers && fb.fromReviewers.length > 0) {
+          base.clientAddress_in = fb.fromReviewers.map((a) => a.toLowerCase());
+        }
+        if (fb.endpoint) base.endpoint_contains_nocase = fb.endpoint;
+        if (candidates && candidates.length > 0) base.agent_in = candidates;
+
+        if (fb.tag1) base.tag1 = fb.tag1;
+        if (fb.tag2) base.tag2 = fb.tag2;
+        if (fb.tag) {
+          baseAnd.push({ or: [{ tag1: fb.tag }, { tag2: fb.tag }] });
+        }
+
+        const where = baseAnd.length > 0 ? { and: [base, ...baseAnd] } : base;
+
+        for (let skip = 0; skip < max; skip += first) {
+          const rows = await client.queryFeedbacks(where, first, skip, 'createdAt', 'desc');
+          for (const r of rows) {
+            if (!r?.agent?.id) continue;
+            if (fb.hasResponse && !(r.responses && r.responses.length > 0)) continue;
+
+            const agentId = r.agent.id;
+            const v = Number(r.value);
+            if (!Number.isFinite(v)) continue;
+            const s = (statsById[agentId] ||= { sum: 0, count: 0 });
+            s.sum += v;
+            s.count += 1;
+            (matchedAgentsByChain[chainId] ||= new Set()).add(agentId);
+          }
+          if (rows.length < first) break;
+        }
+      })
+    );
+
+    const finalStats: Record<string, { count: number; avg: number }> = {};
+    for (const [agentId, s] of Object.entries(statsById)) {
+      const avg = s.count > 0 ? s.sum / s.count : 0;
+      finalStats[agentId] = { count: s.count, avg };
+    }
+
+    // Build allowlist from stats.
+    const passes = (st: { count: number; avg: number }): boolean => {
+      if (fb.minCount !== undefined && st.count < fb.minCount) return false;
+      if (fb.maxCount !== undefined && st.count > fb.maxCount) return false;
+      if (fb.minValue !== undefined && st.avg < fb.minValue) return false;
+      if (fb.maxValue !== undefined && st.avg > fb.maxValue) return false;
+      return true;
+    };
+
+    const allowByChain: Record<number, string[]> = {};
+
+    for (const chainId of chains) {
+      const matched = matchedAgentsByChain[chainId] || new Set<string>();
+      const candidates = candidateIdsByChain?.[chainId];
+
+      if (fb.hasNoFeedback) {
+        const baseList = candidates || [];
+        allowByChain[chainId] = baseList.filter((id) => !matched.has(id));
+        continue;
+      }
+
+      let ids = Array.from(matched);
+      if (hasThreshold) {
+        ids = ids.filter((id) => passes(finalStats[id] || { count: 0, avg: 0 }));
+      } else if (hasAnyConstraint || fb.hasFeedback) {
+        ids = ids.filter((id) => (finalStats[id]?.count ?? 0) > 0);
+      }
+
+      // If we had an explicit candidate set, intersect (important for keyword path).
+      if (candidates && candidates.length > 0) {
+        const cset = new Set(candidates);
+        ids = ids.filter((id) => cset.has(id));
+      }
+
+      allowByChain[chainId] = ids;
+    }
+
+    return { idsByChain: allowByChain, statsById: Object.fromEntries(Object.entries(finalStats).map(([k, v]) => [k, v])) };
+  }
+
+  private async _searchUnifiedNoKeyword(
+    filters: SearchFilters,
+    options: SearchOptions
+  ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta: SearchResultMeta }> {
+    const { field, direction } = this._parseSort(options.sort, false);
+    const chains = this._resolveChains(filters, false);
+    if (chains.length === 0) {
+      return {
+        items: [],
+        nextCursor: undefined,
+        meta: { chains: [], successfulChains: [], failedChains: [], totalResults: 0, timing: { totalMs: 0 } },
+      };
+    }
+
+    const perChainSkips = this._parsePerChainCursor(chains, options.cursor);
+    const agentIdsByChain = this._normalizeAgentIds(filters, chains);
+    const metadataIdsByChain = await this._prefilterByMetadata(filters, chains);
+    const candidateForFeedback: Record<number, string[]> = {};
+    for (const c of chains) {
+      const ids = this._intersectIds(agentIdsByChain?.[c], metadataIdsByChain?.[c]);
+      if (ids && ids.length > 0) candidateForFeedback[c] = ids;
+    }
+    const feedbackPrefilter = await this._prefilterByFeedback(filters, chains, Object.keys(candidateForFeedback).length > 0 ? candidateForFeedback : undefined);
+    const feedbackIdsByChain = feedbackPrefilter.idsByChain;
+    const feedbackStatsById = feedbackPrefilter.statsById || {};
+
+    const orderBy = ['createdAt', 'updatedAt', 'name', 'chainId', 'lastActivity', 'totalFeedback'].includes(field)
+      ? (field === 'feedbackCount' ? 'totalFeedback' : field)
+      : 'updatedAt';
+    const orderDirection = direction;
+
+    const fetchChain = async (chainId: ChainId): Promise<{ chainId: ChainId; status: 'success' | 'error' | 'unavailable'; items: AgentSummary[] }> => {
+      try {
+        const client =
+          this.defaultChainId !== undefined && chainId === this.defaultChainId ? this.subgraphClient : this._getSubgraphClientForChain(chainId);
+        if (!client) return { chainId, status: 'unavailable', items: [] };
+        const ids0 = this._intersectIds(agentIdsByChain?.[chainId], metadataIdsByChain?.[chainId]);
+        const ids = this._intersectIds(ids0, feedbackIdsByChain?.[chainId]);
+        if (ids && ids.length === 0) return { chainId, status: 'success', items: [] };
+        const where = this._buildWhereV2(filters, ids);
+        const items = await client.searchAgentsV2({
+          where,
+          first: (options.pageSize ?? 50) + 1,
+          skip: perChainSkips[chainId] ?? 0,
+          orderBy,
+          orderDirection,
+        });
+        for (const a of items) {
+          const st = feedbackStatsById[a.agentId];
+          if (st) a.averageValue = st.avg;
+        }
+        return { chainId, status: 'success', items };
+      } catch {
+        return { chainId, status: 'error', items: [] };
+      }
+    };
+
+    const results = await Promise.all(chains.map((c) => fetchChain(c)));
+    const successfulChains = results.filter((r) => r.status === 'success').map((r) => r.chainId);
+    const failedChains = results.filter((r) => r.status !== 'success').map((r) => r.chainId);
+
+    // k-way merge over already-sorted per-chain arrays
+    const cursors: Record<number, number> = {};
+    const arrays: Record<number, AgentSummary[]> = {};
+    for (const r of results) {
+      arrays[r.chainId] = r.items || [];
+      cursors[r.chainId] = 0;
+    }
+
+    const merged: AgentSummary[] = [];
+    const consumed: Record<number, number> = {};
+    for (const c of chains) consumed[c] = 0;
+
+    while (merged.length < (options.pageSize ?? 50) && true) {
+      let bestChain: number | null = null;
+      let bestItem: AgentSummary | null = null;
+      for (const c of chains) {
+        const idx = cursors[c] ?? 0;
+        const arr = arrays[c] || [];
+        if (idx >= arr.length) continue;
+        const candidate = arr[idx];
+        if (!bestItem || this._compareAgents(candidate, bestItem, field, direction) < 0) {
+          bestItem = candidate;
+          bestChain = c;
+        }
+      }
+      if (!bestItem || bestChain === null) break;
+      merged.push(bestItem);
+      cursors[bestChain] = (cursors[bestChain] ?? 0) + 1;
+      consumed[bestChain] = (consumed[bestChain] ?? 0) + 1;
+    }
+
+    // Determine next cursor: if any chain has remaining data (fetched extra or unconsumed), advance.
+    const hasMore = chains.some((c) => {
+      const arr = arrays[c] || [];
+      const idx = cursors[c] ?? 0;
+      return idx < arr.length || arr.length > (options.pageSize ?? 50);
+    });
+
+    const nextSkips: Record<number, number> = {};
+    for (const c of chains) {
+      nextSkips[c] = (perChainSkips[c] ?? 0) + (consumed[c] ?? 0);
+    }
 
     return {
-      items: paginatedAgents,
-      nextCursor,
+      items: merged,
+      nextCursor: hasMore ? this._encodePerChainCursor(nextSkips) : undefined,
+      meta: {
+        chains,
+        successfulChains,
+        failedChains,
+        totalResults: 0,
+        timing: { totalMs: 0 },
+      },
     };
   }
 
-  private _filterAgents(agents: AgentSummary[], params: SearchParams): AgentSummary[] {
+  private async _searchUnifiedWithKeyword(
+    filters: SearchFilters,
+    options: SearchOptions
+  ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta?: SearchResultMeta }> {
+    const keyword = (filters.keyword || '').trim();
+    const pageSize = options.pageSize ?? 50;
+    const offset = this._parseCursorOffset(options.cursor);
+    const chains = this._resolveChains(filters, true);
+    const { field, direction } = this._parseSort(options.sort, true);
+
+    const semantic = new SemanticSearchClient();
+    const results = await semantic.search(keyword, {
+      minScore: options.semanticMinScore,
+      topK: options.semanticTopK,
+    });
+
+    const allowedChains = new Set(chains);
+    const filtered = results.filter((r) => allowedChains.has(r.chainId));
+
+    const byChain: Record<number, string[]> = {};
+    const scoreById: Record<string, number> = {};
+    for (const r of filtered) {
+      (byChain[r.chainId] ||= []).push(r.agentId);
+      scoreById[r.agentId] = r.score;
+    }
+
+    const metadataIdsByChain = await this._prefilterByMetadata(filters, chains);
+    const feedbackPrefilter = await this._prefilterByFeedback(filters, chains, byChain);
+    const feedbackIdsByChain = feedbackPrefilter.idsByChain;
+    const feedbackStatsById = feedbackPrefilter.statsById || {};
+
+    const fetched: AgentSummary[] = [];
+    const successfulChains: number[] = [];
+    const failedChains: number[] = [];
+
+    const orderBy = 'updatedAt';
+    const orderDirection: 'asc' | 'desc' = 'desc';
+    const chunkSize = 500;
+
+    for (const chainId of chains) {
+      const client =
+        this.defaultChainId !== undefined && chainId === this.defaultChainId ? this.subgraphClient : this._getSubgraphClientForChain(chainId);
+      const ids = byChain[chainId] || [];
+      if (!client) {
+        if (ids.length > 0) failedChains.push(chainId);
+        continue;
+      }
+      try {
+        successfulChains.push(chainId);
+        for (let i = 0; i < ids.length; i += chunkSize) {
+          const chunk = ids.slice(i, i + chunkSize);
+          const ids2 = this._intersectIds(chunk, metadataIdsByChain?.[chainId]);
+          const ids3 = this._intersectIds(ids2, feedbackIdsByChain?.[chainId]);
+          if (ids3 && ids3.length === 0) continue;
+          const where = this._buildWhereV2(filters, ids3);
+          const agents = await client.searchAgentsV2({ where, first: (ids3 || []).length, skip: 0, orderBy, orderDirection });
+          for (const a of agents) {
+            a.semanticScore = scoreById[a.agentId];
+            const st = feedbackStatsById[a.agentId];
+            if (st) a.averageValue = st.avg;
+            fetched.push(a);
+          }
+        }
+      } catch {
+        failedChains.push(chainId);
+      }
+    }
+
+    // Default sort for keyword is semanticScore desc
+    const sortField = options.sort && options.sort.length > 0 ? field : 'semanticScore';
+    const sortDir = options.sort && options.sort.length > 0 ? direction : 'desc';
+    fetched.sort((a, b) => this._compareAgents(a, b, sortField, sortDir));
+
+    const page = fetched.slice(offset, offset + pageSize);
+    const nextCursor = fetched.length > offset + pageSize ? String(offset + pageSize) : undefined;
+
+    return {
+      items: page,
+      nextCursor,
+      meta: {
+        chains,
+        successfulChains,
+        failedChains,
+        totalResults: fetched.length,
+        timing: { totalMs: 0 },
+      },
+    };
+  }
+
+  private _filterAgents(agents: AgentSummary[], params: SearchFilters): AgentSummary[] {
     const {
       name,
-      mcp,
-      a2a,
-      ens,
-      did,
+      description,
+      hasMCP,
+      hasA2A,
+      mcpContains,
+      a2aContains,
+      webContains,
+      ensContains,
+      didContains,
       walletAddress,
       supportedTrust,
       a2aSkills,
@@ -137,23 +689,37 @@ export class AgentIndexer {
         return false;
       }
 
-      // Filter by MCP endpoint (flattened to agent.mcp boolean)
-      if (mcp !== undefined && agent.mcp !== mcp) {
+      // Filter by description substring
+      if (description && !agent.description?.toLowerCase().includes(description.toLowerCase())) {
         return false;
       }
 
-      // Filter by A2A endpoint (flattened to agent.a2a boolean)
-      if (a2a !== undefined && agent.a2a !== a2a) {
+      // Endpoint existence filters
+      if (hasMCP !== undefined) {
+        const has = Boolean(agent.mcp);
+        if (has !== hasMCP) return false;
+      }
+      if (hasA2A !== undefined) {
+        const has = Boolean(agent.a2a);
+        if (has !== hasA2A) return false;
+      }
+
+      // Endpoint substring filters
+      if (mcpContains && !(agent.mcp || '').toLowerCase().includes(mcpContains.toLowerCase())) {
+        return false;
+      }
+      if (a2aContains && !(agent.a2a || '').toLowerCase().includes(a2aContains.toLowerCase())) {
+        return false;
+      }
+      if (webContains && !(agent.web || '').toLowerCase().includes(webContains.toLowerCase())) {
         return false;
       }
 
-      // Filter by ENS (flattened from registrationFile)
-      if (ens && agent.ens && normalizeAddress(agent.ens) !== normalizeAddress(ens)) {
+      // ENS/DID substring filters
+      if (ensContains && !(agent.ens || '').toLowerCase().includes(ensContains.toLowerCase())) {
         return false;
       }
-
-      // Filter by DID (flattened from registrationFile)
-      if (did && agent.did !== did) {
+      if (didContains && !(agent.did || '').toLowerCase().includes(didContains.toLowerCase())) {
         return false;
       }
 
@@ -292,14 +858,14 @@ export class AgentIndexer {
   /**
    * Apply cross-chain filters (for fields not supported by subgraph WHERE clause)
    */
-  private _applyCrossChainFilters(agents: AgentSummary[], params: SearchParams): AgentSummary[] {
+  private _applyCrossChainFilters(agents: AgentSummary[], params: SearchFilters): AgentSummary[] {
     return this._filterAgents(agents, params);
   }
 
   /**
    * Deduplicate agents across chains (by name and description)
    */
-  private _deduplicateAgentsCrossChain(agents: AgentSummary[], params: SearchParams): AgentSummary[] {
+  private _deduplicateAgentsCrossChain(agents: AgentSummary[], params: SearchFilters): AgentSummary[] {
     // For now, return as-is (no deduplication)
     // Python SDK has deduplication logic but it's optional
     return agents;
@@ -349,7 +915,7 @@ export class AgentIndexer {
    * Search agents across multiple chains in parallel
    */
   private async _searchAgentsAcrossChains(
-    params: SearchParams,
+    params: SearchFilters,
     sort: string[],
     pageSize: number,
     cursor?: string,
@@ -400,7 +966,7 @@ export class AgentIndexer {
         }
 
         // Build search params for this chain (remove chains filter)
-        const chainParams: SearchParams = { ...params };
+        const chainParams: SearchFilters = { ...params };
         delete chainParams.chains;
 
         // Execute subgraph query (fetch extra to allow for filtering/sorting)
@@ -518,353 +1084,9 @@ export class AgentIndexer {
   }
 
   /**
-   * Search agents by reputation
+   * (Removed) searchAgentsByReputation
+   *
+   * Unified search lives in `SDK.searchAgents()` with `filters.feedback` and related filter surfaces.
    */
-  async searchAgentsByReputation(
-    agents?: string[],
-    tags?: string[],
-    reviewers?: string[],
-    capabilities?: string[],
-    skills?: string[],
-    tasks?: string[],
-    names?: string[],
-    minAverageValue?: number,
-    includeRevoked: boolean = false,
-    first: number = 50,
-    skip: number = 0,
-    sort: string[] = ['createdAt:desc'],
-    chains?: ChainId[] | 'all'
-  ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta?: SearchResultMeta }> {
-    // Handle "all" chains shorthand
-    let chainsToQuery: ChainId[] | undefined;
-    if (chains === 'all') {
-      chainsToQuery = this._getAllConfiguredChains();
-    } else if (chains && Array.isArray(chains) && chains.length > 0) {
-      chainsToQuery = chains;
-    }
-
-    // If chains are specified, use multi-chain search
-    // Route to multi-chain if multiple chains OR if single chain is specified (to ensure correct subgraph client)
-    if (chainsToQuery && chainsToQuery.length > 0) {
-      return this._searchAgentsByReputationAcrossChains(
-        agents,
-        tags,
-        reviewers,
-        capabilities,
-        skills,
-        tasks,
-        names,
-        minAverageValue,
-        includeRevoked,
-        first,
-        skip,
-        sort,
-        chainsToQuery
-      );
-    }
-
-    // Single-chain search (existing logic)
-    if (!this.subgraphClient) {
-      throw new Error('Subgraph client required for reputation search');
-    }
-
-    // Parse sort parameter
-    let orderBy = 'createdAt';
-    let orderDirection: 'asc' | 'desc' = 'desc';
-    if (sort && sort.length > 0) {
-      const sortField = sort[0].split(':');
-      orderBy = sortField[0] || orderBy;
-      orderDirection = (sortField[1] as 'asc' | 'desc') || orderDirection;
-    }
-
-    try {
-      const agentsData = await this.subgraphClient.searchAgentsByReputation(
-        agents,
-        tags,
-        reviewers,
-        capabilities,
-        skills,
-        tasks,
-        names,
-        minAverageValue,
-        includeRevoked,
-        first,
-        skip,
-        orderBy,
-        orderDirection
-      );
-
-      // Transform to AgentSummary with averageValue in extras
-      const items: AgentSummary[] = agentsData.map((agent) => {
-        const regFile = agent.registrationFile;
-        
-        return {
-          chainId: parseInt(agent.chainId?.toString() || '0', 10),
-          agentId: agent.id || '',
-          name: regFile?.name || '',
-          image: regFile?.image || undefined,
-          description: regFile?.description || '',
-          owners: agent.owner ? [normalizeAddress(agent.owner)] : [],
-          operators: (agent.operators || []).map((op: string) => normalizeAddress(op)),
-          mcp: !!regFile?.mcpEndpoint,
-          a2a: !!regFile?.a2aEndpoint,
-          ens: regFile?.ens || undefined,
-          did: regFile?.did || undefined,
-          // agentWallet is stored on the Agent entity in the current subgraph schema.
-          walletAddress: agent.agentWallet ? normalizeAddress(agent.agentWallet) : undefined,
-          supportedTrusts: regFile?.supportedTrusts || [],
-          a2aSkills: regFile?.a2aSkills || [],
-          mcpTools: regFile?.mcpTools || [],
-          mcpPrompts: regFile?.mcpPrompts || [],
-          mcpResources: regFile?.mcpResources || [],
-          active: regFile?.active ?? false,
-          x402support: regFile?.x402support ?? false,
-          extras: {
-            averageValue: agent.averageValue !== null ? agent.averageValue : undefined,
-          },
-        };
-      });
-
-      const nextCursor = items.length === first ? String(skip + items.length) : undefined;
-
-      return {
-        items,
-        nextCursor,
-      };
-    } catch (error) {
-      throw new Error(`Failed to search agents by reputation: ${error}`);
-    }
-  }
-
-  /**
-   * Search agents by reputation across multiple chains in parallel
-   */
-  private async _searchAgentsByReputationAcrossChains(
-    agents?: string[],
-    tags?: string[],
-    reviewers?: string[],
-    capabilities?: string[],
-    skills?: string[],
-    tasks?: string[],
-    names?: string[],
-    minAverageValue?: number,
-    includeRevoked: boolean = false,
-    pageSize: number = 50,
-    skip: number = 0,
-    sort: string[] = ['createdAt:desc'],
-    chains: ChainId[] = [],
-    timeout: number = 30000
-  ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta: SearchResultMeta }> {
-    const startTime = Date.now();
-
-    if (chains.length === 0) {
-      return {
-        items: [],
-        nextCursor: undefined,
-        meta: {
-          chains: [],
-          successfulChains: [],
-          failedChains: [],
-          totalResults: 0,
-          timing: { totalMs: 0 },
-        },
-      };
-    }
-
-    // Parse sort parameter
-    let orderBy = 'createdAt';
-    let orderDirection: 'asc' | 'desc' = 'desc';
-    if (sort && sort.length > 0) {
-      const sortField = sort[0].split(':');
-      orderBy = sortField[0] || orderBy;
-      orderDirection = (sortField[1] as 'asc' | 'desc') || orderDirection;
-    }
-
-    // Define async function for querying a single chain
-    const querySingleChain = async (chainId: ChainId): Promise<{
-      chainId: ChainId;
-      status: 'success' | 'error' | 'timeout' | 'unavailable';
-      agents: Array<any>; // Will be transformed to AgentSummary later
-      error?: string;
-    }> => {
-      try {
-        const subgraphClient = this._getSubgraphClientForChain(chainId);
-
-        if (!subgraphClient) {
-          return {
-            chainId,
-            status: 'unavailable',
-            agents: [],
-            error: `No subgraph configured for chain ${chainId}`,
-          };
-        }
-
-        // Execute reputation search query
-        try {
-          const agentsData = await subgraphClient.searchAgentsByReputation(
-            agents,
-            tags,
-            reviewers,
-            capabilities,
-            skills,
-            tasks,
-            names,
-            minAverageValue,
-            includeRevoked,
-            pageSize * 3, // Fetch extra to allow for filtering/sorting
-            0, // We'll handle pagination after aggregation
-            orderBy,
-            orderDirection
-          );
-
-          return {
-            chainId,
-            status: 'success',
-            agents: agentsData,
-          };
-        } catch (error) {
-          return {
-            chainId,
-            status: 'error',
-            agents: [],
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-      } catch (error) {
-        return {
-          chainId,
-          status: 'error',
-          agents: [],
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    };
-
-    // Execute all chain queries in parallel with timeout
-    const chainPromises = chains.map(chainId => {
-      return Promise.race([
-        querySingleChain(chainId),
-        new Promise<{ chainId: ChainId; status: 'timeout'; agents: any[] }>((resolve) => {
-          setTimeout(() => {
-            resolve({
-              chainId,
-              status: 'timeout',
-              agents: [],
-            });
-          }, timeout);
-        }),
-      ]);
-    });
-
-    const chainResults = await Promise.allSettled(chainPromises);
-
-    // Extract successful results and track failures
-    const allAgents: Array<any> = []; // Will be transformed to AgentSummary later
-    const successfulChains: ChainId[] = [];
-    const failedChains: ChainId[] = [];
-
-    for (let i = 0; i < chainResults.length; i++) {
-      const result = chainResults[i];
-      const chainId = chains[i];
-
-      if (result.status === 'fulfilled') {
-        const chainResult = result.value;
-
-        if (chainResult.status === 'success') {
-          successfulChains.push(chainId);
-          allAgents.push(...chainResult.agents);
-        } else {
-          failedChains.push(chainId);
-        }
-      } else {
-        failedChains.push(chainId);
-      }
-    }
-
-    // If ALL chains failed, return error metadata
-    if (successfulChains.length === 0) {
-      const queryTime = Date.now() - startTime;
-      return {
-        items: [],
-        nextCursor: undefined,
-        meta: {
-          chains,
-          successfulChains: [],
-          failedChains,
-          totalResults: 0,
-          timing: { totalMs: queryTime },
-        },
-      };
-    }
-
-    // Transform to AgentSummary with averageValue in extras
-    const results: AgentSummary[] = allAgents.map((agent) => {
-      const regFile = agent.registrationFile || {};
-      
-      return {
-        chainId: parseInt(agent.chainId?.toString() || '0', 10),
-        agentId: agent.id || '',
-        name: regFile?.name || '',
-        image: regFile?.image || undefined,
-        description: regFile?.description || '',
-        owners: agent.owner ? [normalizeAddress(agent.owner)] : [],
-        operators: (agent.operators || []).map((op: string) => normalizeAddress(op)),
-        mcp: !!regFile?.mcpEndpoint,
-        a2a: !!regFile?.a2aEndpoint,
-        ens: regFile?.ens || undefined,
-        did: regFile?.did || undefined,
-        // agentWallet is stored on the Agent entity in the current subgraph schema.
-        walletAddress: agent.agentWallet ? normalizeAddress(agent.agentWallet) : undefined,
-        supportedTrusts: regFile?.supportedTrusts || [],
-        a2aSkills: regFile?.a2aSkills || [],
-        mcpTools: regFile?.mcpTools || [],
-        mcpPrompts: regFile?.mcpPrompts || [],
-        mcpResources: regFile?.mcpResources || [],
-        active: regFile?.active ?? false,
-        x402support: regFile?.x402support ?? false,
-        extras: {
-          averageValue: agent.averageValue !== null ? agent.averageValue : undefined,
-        },
-      };
-    });
-
-    // Sort by averageValue (descending) if available, otherwise by createdAt
-    results.sort((a, b) => {
-      const aValue = (a.extras as any)?.averageValue ?? 0;
-      const bValue = (b.extras as any)?.averageValue ?? 0;
-      if (aValue !== bValue) {
-        return bValue - aValue; // Descending
-      }
-      // Secondary sort by chainId, then agentId
-      if (a.chainId !== b.chainId) {
-        return a.chainId - b.chainId;
-      }
-      return a.agentId.localeCompare(b.agentId);
-    });
-
-    // Apply pagination
-    const paginatedResults = results.slice(skip, skip + pageSize);
-    const nextCursor = results.length > skip + pageSize
-      ? String(skip + pageSize)
-      : undefined;
-
-    // Build response with metadata
-    const queryTime = Date.now() - startTime;
-
-    return {
-      items: paginatedResults,
-      nextCursor,
-      meta: {
-        chains,
-        successfulChains,
-        failedChains,
-        totalResults: results.length,
-        timing: {
-          totalMs: queryTime,
-          averagePerChainMs: chains.length > 0 ? Math.floor(queryTime / chains.length) : undefined,
-        },
-      },
-    };
-  }
 }
 

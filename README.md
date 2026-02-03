@@ -4,7 +4,7 @@ Agent0 is the TypeScript SDK for agentic economies. It enables agents to registe
 
 ## What Does Agent0 SDK Do?
 
-Agent0 SDK v1.2.0 enables you to:
+Agent0 SDK enables you to:
 
 - **Create and manage agent identities** - Register your AI agent on-chain with a unique identity, configure presentation fields (name, description, image), set wallet addresses, and manage trust models with x402 support
 - **Advertise agent capabilities** - Publish MCP and A2A endpoints, with automated extraction of MCP tools and A2A skills from endpoints
@@ -14,11 +14,11 @@ Agent0 SDK v1.2.0 enables you to:
 - **Cross-chain registration** - One-line registration with IPFS nodes, Pinata, Filecoin, or HTTP URIs
 - **Public indexing** - Subgraph indexing both on-chain and IPFS data for fast search and retrieval
 
-## ⚠️ Beta Release
+## Pre-release (1.5.0)
 
-Agent0 SDK v1.2.0 is beta. We're actively testing and improving it.
+This branch contains a **1.5.0 pre-release** with a unified agent discovery/search API.
 
-For breaking changes and migration notes, see `release_notes/RELEASE_NOTES_1.2.0.md` and prior notes in `release_notes/`.
+For breaking changes and migration notes, see `release_notes/RELEASE_NOTES_1.5.0-beta.1.md` (and prior notes in `release_notes/`).
 
 **Bug reports & feedback:** GitHub: [Report issues](https://github.com/agent0lab/agent0-ts/issues) | Telegram: [Agent0 channel](https://t.me/agent0kitchen) | Email: team@ag0.xyz
 
@@ -36,6 +36,12 @@ For breaking changes and migration notes, see `release_notes/RELEASE_NOTES_1.2.0
 
 ```bash
 npm install agent0-sdk
+```
+
+To install the **pre-release** explicitly:
+
+```bash
+npm install agent0-sdk@1.5.0-beta.1
 ```
 
 **Note:** This package is an ESM (ECMAScript Module) package. Use `import` statements in your code:
@@ -149,14 +155,18 @@ console.log(`Updated: ${agent.agentURI}`);
 ### 4. Search Agents
 
 ```typescript
-// Search by name, capabilities, or attributes (single chain)
-const results = await sdk.searchAgents({
-  name: 'AI', // Substring search
-  mcpTools: ['code_generation'], // Specific MCP tools
-  a2aSkills: ['python'], // Specific A2A skills
-  active: true, // Only active agents
-  x402support: true // Payment support
-});
+// Unified search (single chain): agent filters + reputation filters in one call
+const results = await sdk.searchAgents(
+  {
+    name: 'AI', // substring
+    mcpTools: ['code_generation'],
+    a2aSkills: ['python'],
+    active: true,
+    x402support: true,
+    feedback: { minValue: 80, tag: 'enterprise', includeRevoked: false },
+  },
+  { pageSize: 20, sort: ['updatedAt:desc'] }
+);
 
 for (const agent of results.items) {
   console.log(`${agent.name}: ${agent.description}`);
@@ -164,12 +174,8 @@ for (const agent of results.items) {
   console.log(`  Skills: ${agent.a2aSkills?.join(', ')}`);
 }
 
-// Multi-chain search
-const multiChainResults = await sdk.searchAgents({
-  active: true,
-  chains: [11155111, 84532, 80002] // ETH Sepolia, Base Sepolia, Polygon Amoy
-  // Or use 'all' to search all configured chains: chains: 'all'
-});
+// Multi-chain search (SDK defaults include 1, 11155111, 137)
+const multiChainResults = await sdk.searchAgents({ active: true, chains: [1, 11155111, 137] }, { pageSize: 20 });
 
 console.log(`Found ${multiChainResults.items.length} agents across chains`);
 if (multiChainResults.meta) {
@@ -178,8 +184,7 @@ if (multiChainResults.meta) {
 
 // Get single agent (read-only, faster)
 // Supports chainId:agentId format
-const agentSummary = await sdk.getAgent('11155111:123'); // Default chain
-const baseAgent = await sdk.getAgent('84532:123'); // Base Sepolia
+const agentSummary = await sdk.getAgent('11155111:123'); // explicit chainId:agentId
 ```
 
 ### 4a. Multi-Chain Search
@@ -188,7 +193,7 @@ const baseAgent = await sdk.getAgent('84532:123'); // Base Sepolia
 // Search across multiple chains
 const results = await sdk.searchAgents({
   active: true,
-  chains: [11155111, 84532] // ETH Sepolia and Base Sepolia
+  chains: [1, 11155111, 137] // Ethereum Mainnet, Ethereum Sepolia, Polygon Mainnet
 });
 
 // Search all configured chains
@@ -197,17 +202,17 @@ const allResults = await sdk.searchAgents({
   chains: 'all' // Searches all configured chains
 });
 
-// Search agents by reputation across chains
-const reputationResults = await sdk.searchAgentsByReputation(
-  { minAverageValue: 80 },
-  { includeRevoked: false, pageSize: 20, chains: [11155111, 84532] }
+// Search agents by feedback-derived reputation across chains (unified search)
+const reputationResults = await sdk.searchAgents(
+  { chains: [1, 11155111, 137], feedback: { minValue: 80, includeRevoked: false } },
+  { pageSize: 20 }
 );
 
 // Get agent from specific chain
-const agent = await sdk.getAgent('84532:123'); // Base Sepolia
+const agent = await sdk.getAgent('1:123'); // Ethereum Mainnet
 
 // Search feedback for a specific agent (unchanged)
-const feedbacks = await sdk.searchFeedback({ agentId: '84532:123' }); // Base Sepolia
+const feedbacks = await sdk.searchFeedback({ agentId: '1:123' }); // Ethereum Mainnet
 
 // NEW: Search feedback given by a reviewer wallet (across all agents)
 const givenFeedback = await sdk.searchFeedback({
@@ -216,11 +221,11 @@ const givenFeedback = await sdk.searchFeedback({
 
 // NEW: Search feedback across multiple agents at once
 const multiFeedback = await sdk.searchFeedback({
-  agents: ['84532:123', '84532:456', '84532:789'],
+  agents: ['1:123', '1:456', '11155111:789'],
 });
 
 // Get reputation summary for agent on specific chain
-const summary = await sdk.getReputationSummary('84532:123'); // Base Sepolia
+const summary = await sdk.getReputationSummary('1:123'); // Ethereum Mainnet
 ```
 
 ### 5. Give and Retrieve Feedback
@@ -299,8 +304,7 @@ The SDK supports querying agents across multiple blockchain networks:
 
 - **Ethereum Mainnet** (Chain ID: `1`)
 - **Ethereum Sepolia** (Chain ID: `11155111`)
-- **Base Sepolia** (Chain ID: `84532`)
-- **Polygon Amoy** (Chain ID: `80002`)
+- **Polygon Mainnet** (Chain ID: `137`)
 
 ### Chain-Agnostic Agent IDs
 
@@ -308,14 +312,14 @@ Use `chainId:agentId` format to specify which chain an agent is on:
 
 ```typescript
 // Get agent from specific chain
-const agent = await sdk.getAgent('84532:1234');  // Base Sepolia
+const agent = await sdk.getAgent('1:1234');  // Ethereum Mainnet
 
 // Search feedback for agent on specific chain
-const feedbacks = await sdk.searchFeedback({ agentId: '84532:1234' });  // Base Sepolia
+const feedbacks = await sdk.searchFeedback({ agentId: '1:1234' });  // Ethereum Mainnet
 const feedbacksDefault = await sdk.searchFeedback({ agentId: '11155111:1234' });  // Default chain
 
 // Get reputation summary for agent on specific chain
-const summary = await sdk.getReputationSummary('84532:1234');  // Base Sepolia
+const summary = await sdk.getReputationSummary('1:1234');  // Ethereum Mainnet
 const summaryDefault = await sdk.getReputationSummary('1234');  // Uses default chain
 ```
 
@@ -327,7 +331,7 @@ Search across multiple chains simultaneously:
 // Search across multiple chains
 const result = await sdk.searchAgents({
   active: true,
-  chains: [1, 11155111, 84532]  // Ethereum Mainnet, ETH Sepolia, Base Sepolia
+  chains: [1, 11155111, 137]  // Ethereum Mainnet, Ethereum Sepolia, Polygon Mainnet
 });
 
 // Search all configured chains
@@ -336,16 +340,16 @@ const allChainsResult = await sdk.searchAgents({
   chains: 'all'  // Searches all configured chains
 });
 
-// Multi-chain reputation search
-const reputationResult = await sdk.searchAgentsByReputation(
-  { minAverageValue: 80 },
-  { includeRevoked: false, pageSize: 20, chains: [11155111, 84532] }
+// Multi-chain feedback-derived reputation search (unified search)
+const reputationResult = await sdk.searchAgents(
+  { chains: [1, 11155111, 137], feedback: { minValue: 80, includeRevoked: false } },
+  { pageSize: 20 }
 );
 
-// Search all chains for agents with reputation
-const allChainsReputation = await sdk.searchAgentsByReputation(
-  { minAverageValue: 80 },
-  { includeRevoked: false, pageSize: 20, chains: 'all' }
+// Search all chains for agents with reputation (unified search)
+const allChainsReputation = await sdk.searchAgents(
+  { chains: 'all', feedback: { minValue: 80, includeRevoked: false } },
+  { pageSize: 20 }
 );
 
 // Access metadata about queried chains
@@ -372,7 +376,7 @@ const sdk = new SDK({
 const agent = await sdk.getAgent('1234');  // Equivalent to "11155111:1234"
 
 // Explicitly specify different chain
-const agent = await sdk.getAgent('84532:1234');  // Base Sepolia
+const agent = await sdk.getAgent('1:1234');  // Ethereum Mainnet
 ```
 
 ## OASF Taxonomies
