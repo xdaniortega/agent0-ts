@@ -59,13 +59,13 @@ describeMaybe('Unified searchAgents - mainnet complex fixture (live)', () => {
           minCount: FIXTURE.feedback.minCount,
         },
       },
-      { pageSize: 20, sort: ['averageValue:desc'] }
+      { sort: ['averageValue:desc'] }
     );
 
-    const ids = results.items.map((a) => a.agentId);
+    const ids = results.map((a) => a.agentId);
     expect(ids).toContain(FIXTURE.agentId);
 
-    const agent = results.items.find((a) => a.agentId === FIXTURE.agentId)!;
+    const agent = results.find((a) => a.agentId === FIXTURE.agentId)!;
     expect(agent.chainId).toBe(FIXTURE.chainId);
 
     // Endpoint semantics (strings)

@@ -21,21 +21,29 @@ describeMaybe('searchAgents with keyword (semantic path)', () => {
   });
 
   it('returns items when keyword is provided', async () => {
-    const result = await sdk.searchAgents(
-      { keyword: 'crypto agent' },
-      { pageSize: 5, semanticTopK: 10 }
-    );
-    expect(result).toHaveProperty('items');
-    expect(Array.isArray(result.items)).toBe(true);
-    expect(result.items.length).toBeGreaterThanOrEqual(0);
+    let result: any[] = [];
+    try {
+      result = await sdk.searchAgents(
+        { keyword: 'crypto agent' },
+        { semanticTopK: 10 }
+      );
+    } catch (e: any) {
+      if (String(e?.message || e).includes('HTTP 429')) {
+        console.warn('[live-test] Semantic endpoint rate limited (429); skipping.');
+        return;
+      }
+      throw e;
+    }
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBeGreaterThanOrEqual(0);
   });
 
   it('items have agentId in chainId:tokenId format when present', async () => {
     const result = await sdk.searchAgents(
       { keyword: 'agent' },
-      { pageSize: 3, semanticTopK: 5 }
+      { semanticTopK: 5 }
     );
-    for (const item of result.items) {
+    for (const item of result) {
       expect(item.agentId).toMatch(/^\d+:\d+$/);
       expect(item.chainId).toBeDefined();
       expect(typeof item.chainId).toBe('number');
@@ -45,9 +53,9 @@ describeMaybe('searchAgents with keyword (semantic path)', () => {
   it('items can have semanticScore when from semantic path', async () => {
     const result = await sdk.searchAgents(
       { keyword: 'crypto' },
-      { pageSize: 5, semanticTopK: 10 }
+      { semanticTopK: 10 }
     );
-    for (const item of result.items) {
+    for (const item of result) {
       if ((item as any).semanticScore != null) {
         expect(typeof (item as any).semanticScore).toBe('number');
         expect((item as any).semanticScore).toBeGreaterThanOrEqual(0);
@@ -56,22 +64,5 @@ describeMaybe('searchAgents with keyword (semantic path)', () => {
     }
   });
 
-  it('supports cursor pagination with keyword', async () => {
-    const page1 = await sdk.searchAgents(
-      { keyword: 'agent' },
-      { pageSize: 2, semanticTopK: 10 }
-    );
-    expect(page1.items.length).toBeLessThanOrEqual(2);
-    if (page1.nextCursor && page1.items.length > 0) {
-      const page2 = await sdk.searchAgents(
-        { keyword: 'agent' },
-        { pageSize: 2, semanticTopK: 10, cursor: page1.nextCursor }
-      );
-      expect(Array.isArray(page2.items)).toBe(true);
-      const ids1 = page1.items.map((a) => a.agentId);
-      const ids2 = page2.items.map((a) => a.agentId);
-      const overlap = ids1.filter((id) => ids2.includes(id));
-      expect(overlap.length).toBe(0);
-    }
-  });
+  // Pagination removed: keyword searches return all results (bounded only by semantic endpoint limit).
 });

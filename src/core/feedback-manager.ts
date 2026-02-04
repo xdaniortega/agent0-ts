@@ -447,48 +447,45 @@ export class FeedbackManager {
       return [];
     }
 
-    // Query subgraph
-    const feedbacksData = await subgraphClientToUse.searchFeedback(
-      {
-        agents: formattedAgents || params.agents,
-        reviewers: params.reviewers,
-        tags: params.tags,
-        capabilities: params.capabilities,
-        skills: params.skills,
-        tasks: params.tasks,
-        names: params.names,
-        minValue: params.minValue,
-        maxValue: params.maxValue,
-        includeRevoked: params.includeRevoked || false,
-      },
-      100, // first
-      0, // skip
-      'createdAt',
-      'desc'
-    );
-
-    // Map to Feedback objects
     const feedbacks: Feedback[] = [];
-    for (const fbData of feedbacksData) {
-      // Parse agentId from feedback ID
-      const feedbackId = fbData.id;
-      const parts = feedbackId.split(':');
-      let agentIdStr: string;
-      let clientAddr: string;
-      let feedbackIdx: number;
+    const first = 1000;
+    const queryParams = {
+      agents: formattedAgents || params.agents,
+      reviewers: params.reviewers,
+      tags: params.tags,
+      capabilities: params.capabilities,
+      skills: params.skills,
+      tasks: params.tasks,
+      names: params.names,
+      minValue: params.minValue,
+      maxValue: params.maxValue,
+      includeRevoked: params.includeRevoked || false,
+    };
 
-      if (parts.length >= 2) {
-        agentIdStr = `${parts[0]}:${parts[1]}`;
-        clientAddr = parts.length > 2 ? parts[2] : '';
-        feedbackIdx = parts.length > 3 ? parseInt(parts[3], 10) : 1;
-      } else {
-        agentIdStr = feedbackId;
-        clientAddr = '';
-        feedbackIdx = 1;
+    for (let skip = 0; ; skip += first) {
+      const feedbacksData = await subgraphClientToUse.searchFeedback(queryParams, first, skip, 'createdAt', 'desc');
+      for (const fbData of feedbacksData) {
+        // Parse agentId from feedback ID
+        const feedbackId = fbData.id;
+        const parts = feedbackId.split(':');
+        let agentIdStr: string;
+        let clientAddr: string;
+        let feedbackIdx: number;
+
+        if (parts.length >= 2) {
+          agentIdStr = `${parts[0]}:${parts[1]}`;
+          clientAddr = parts.length > 2 ? parts[2] : '';
+          feedbackIdx = parts.length > 3 ? parseInt(parts[3], 10) : 1;
+        } else {
+          agentIdStr = feedbackId;
+          clientAddr = '';
+          feedbackIdx = 1;
+        }
+
+        const feedback = this._mapSubgraphFeedbackToModel(fbData, agentIdStr, clientAddr, feedbackIdx);
+        feedbacks.push(feedback);
       }
-
-      const feedback = this._mapSubgraphFeedbackToModel(fbData, agentIdStr, clientAddr, feedbackIdx);
-      feedbacks.push(feedback);
+      if (feedbacksData.length < first) break;
     }
 
     return feedbacks;

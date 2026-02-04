@@ -15,6 +15,10 @@ export interface SemanticSearchOptions {
  * Thin client for the external semantic-search endpoint.
  *
  * NOTE: Per requirement, we do not use semantic backend filtering; only `query`, `minScore`, `topK`.
+ *
+ * SDK defaults (applied here so developers don't need to pass them):
+ * - minScore: 0.5
+ * - topK: 5000
  */
 export class SemanticSearchClient {
   constructor(
@@ -24,10 +28,11 @@ export class SemanticSearchClient {
   async search(query: string, opts: SemanticSearchOptions = {}): Promise<SemanticSearchResult[]> {
     if (!query || !query.trim()) return [];
 
-    const body: Record<string, unknown> = { query: query.trim() };
-    if (opts.minScore !== undefined) body.minScore = opts.minScore;
+    const minScore = opts.minScore ?? 0.5;
+    const limit = opts.topK ?? 5000;
+
     // API expects "limit" not "topK" (semantic-search.ag0.xyz v1)
-    if (opts.topK !== undefined) body.limit = opts.topK;
+    const body: Record<string, unknown> = { query: query.trim(), minScore, limit };
 
     const res = await fetch(`${this.baseUrl}/api/v1/search`, {
       method: 'POST',

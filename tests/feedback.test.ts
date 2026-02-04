@@ -316,8 +316,8 @@ describeMaybe('Agent Feedback Flow with IPFS Pin', () => {
     // If none are found, fall back to a single-agent array (still validates the new param path).
     let otherAgentId: string | undefined;
     try {
-      const page = await agentSdkWithSigner.searchAgents({}, { pageSize: 5 });
-      otherAgentId = page.items.find((a) => a.agentId && a.agentId !== agentId)?.agentId;
+      const agents = await agentSdkWithSigner.searchAgents({});
+      otherAgentId = agents.find((a) => a.agentId && a.agentId !== agentId)?.agentId;
     } catch {
       // ignore and use fallback
     }

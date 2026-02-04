@@ -237,8 +237,6 @@ export interface SearchFilters {
  */
 export interface SearchOptions {
   sort?: string[];
-  pageSize?: number;
-  cursor?: string;
   semanticMinScore?: number;
   semanticTopK?: number;
 }
@@ -294,14 +292,5 @@ export interface FeedbackSearchOptions {
 /**
  * Metadata for multi-chain search results
  */
-export interface SearchResultMeta {
-  chains: number[]; // ChainId[]
-  successfulChains: number[]; // ChainId[]
-  failedChains: number[]; // ChainId[]
-  totalResults: number;
-  timing: {
-    totalMs: number;
-    averagePerChainMs?: number;
-  };
-}
+// Note: Pagination has been removed; search APIs now return full result lists.
 

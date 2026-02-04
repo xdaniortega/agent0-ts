@@ -61,7 +61,7 @@ describe('SemanticSearchClient', () => {
         expect.objectContaining({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: 'crypto agent' }),
+          body: JSON.stringify({ query: 'crypto agent', minScore: 0.5, limit: 5000 }),
         })
       );
     });
@@ -78,7 +78,7 @@ describe('SemanticSearchClient', () => {
       expect(fetchMock).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          body: JSON.stringify({ query: 'crypto agent' }),
+          body: JSON.stringify({ query: 'crypto agent', minScore: 0.5, limit: 5000 }),
         })
       );
     });
@@ -95,7 +95,7 @@ describe('SemanticSearchClient', () => {
       expect(fetchMock).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          body: JSON.stringify({ query: 'agent', limit: 10 }),
+          body: JSON.stringify({ query: 'agent', minScore: 0.5, limit: 10 }),
         })
       );
     });
@@ -112,7 +112,7 @@ describe('SemanticSearchClient', () => {
       expect(fetchMock).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          body: JSON.stringify({ query: 'agent', minScore: 0.5 }),
+          body: JSON.stringify({ query: 'agent', minScore: 0.5, limit: 5000 }),
         })
       );
     });

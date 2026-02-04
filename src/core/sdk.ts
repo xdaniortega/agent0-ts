@@ -5,7 +5,6 @@ import type {
   AgentSummary,
   Feedback,
   SearchFeedbackParams,
-  SearchResultMeta,
   RegistrationFile,
   Endpoint,
   FeedbackFileInput,
@@ -341,11 +340,8 @@ export class SDK {
   async searchAgents(
     filters: SearchFilters = {},
     options: SearchOptions = {}
-  ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta?: SearchResultMeta }> {
-    const pageSize = options.pageSize ?? 50;
-    const cursor = options.cursor;
-    const sort = options.sort ?? [];
-    return this._indexer.searchAgents(filters, { pageSize, cursor, sort, ...options });
+  ): Promise<AgentSummary[]> {
+    return this._indexer.searchAgents(filters, options);
   }
 
   /**

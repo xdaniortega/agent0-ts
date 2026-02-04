@@ -22,23 +22,30 @@ describeMaybe('Semantic search via SDK (live)', () => {
   });
 
   it('returns results for a non-empty keyword query', async () => {
-    const result = await sdk.searchAgents(
-      { keyword: 'crypto agent' },
-      { pageSize: 5, semanticTopK: 10 }
-    );
-    expect(result.items).toBeDefined();
-    expect(Array.isArray(result.items)).toBe(true);
-    expect(result.items.length).toBeGreaterThan(0);
-    expect(result.items.length).toBeLessThanOrEqual(5);
+    let result: any[] = [];
+    try {
+      result = await sdk.searchAgents(
+        { keyword: 'crypto agent' },
+        { semanticTopK: 10 }
+      );
+    } catch (e: any) {
+      if (String(e?.message || e).includes('HTTP 429')) {
+        console.warn('[live-test] Semantic endpoint rate limited (429); skipping.');
+        return;
+      }
+      throw e;
+    }
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBeGreaterThan(0);
   });
 
   it('each item has chainId, agentId (chainId:tokenId), and optional semanticScore', async () => {
     const result = await sdk.searchAgents(
       { keyword: 'agent' },
-      { pageSize: 3, semanticTopK: 5 }
+      { semanticTopK: 5 }
     );
-    expect(result.items.length).toBeGreaterThan(0);
-    for (const item of result.items) {
+    expect(result.length).toBeGreaterThan(0);
+    for (const item of result) {
       expect(typeof item.chainId).toBe('number');
       expect(typeof item.agentId).toBe('string');
       expect(item.agentId).toMatch(/^\d+:\d+$/);
@@ -50,23 +57,17 @@ describeMaybe('Semantic search via SDK (live)', () => {
     }
   });
 
-  it('respects pageSize', async () => {
-    const result = await sdk.searchAgents(
-      { keyword: 'agent' },
-      { pageSize: 2, semanticTopK: 5 }
-    );
-    expect(result.items.length).toBeLessThanOrEqual(2);
-  });
+  // Pagination removed.
 
   it('returns valid structure (single query to avoid rate limit)', async () => {
     const result = await sdk.searchAgents(
       { keyword: 'assistant' },
-      { pageSize: 2, semanticTopK: 5 }
+      { semanticTopK: 5 }
     );
-    expect(Array.isArray(result.items)).toBe(true);
-    if (result.items.length > 0) {
-      expect(result.items[0].agentId).toMatch(/^\d+:\d+$/);
-      expect(typeof result.items[0].chainId).toBe('number');
+    expect(Array.isArray(result)).toBe(true);
+    if (result.length > 0) {
+      expect(result[0].agentId).toMatch(/^\d+:\d+$/);
+      expect(typeof result[0].chainId).toBe('number');
     }
   });
 });

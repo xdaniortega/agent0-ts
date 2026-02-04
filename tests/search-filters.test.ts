@@ -103,15 +103,11 @@ describe('SearchFilters / SearchOptions', () => {
       expect(o).toEqual({});
     });
 
-    it('accepts sort, pageSize, cursor', () => {
+    it('accepts sort', () => {
       const o: SearchOptions = {
         sort: ['updatedAt:desc', 'name:asc'],
-        pageSize: 20,
-        cursor: '10',
       };
       expect(o.sort).toHaveLength(2);
-      expect(o.pageSize).toBe(20);
-      expect(o.cursor).toBe('10');
     });
 
     it('accepts semanticMinScore and semanticTopK', () => {
@@ -125,9 +121,9 @@ describe('SearchFilters / SearchOptions', () => {
   });
 
   describe('filter combination', () => {
-    it('keyword + chains + pageSize is valid', () => {
+    it('keyword + chains is valid', () => {
       const filters: SearchFilters = { keyword: 'agent', chains: [1] };
-      const options: SearchOptions = { pageSize: 10, semanticTopK: 20 };
+      const options: SearchOptions = { semanticTopK: 20 };
       expect(filters.keyword).toBe('agent');
       expect(options.semanticTopK).toBe(20);
     });

@@ -3,18 +3,29 @@
  * Simplified version focused on subgraph queries (no local ML indexing)
  */
 
-import type { AgentSummary, SearchFilters, SearchOptions, SearchResultMeta } from '../models/interfaces.js';
+import type { AgentSummary, SearchFilters, SearchOptions } from '../models/interfaces.js';
 import type { AgentId, ChainId } from '../models/types.js';
 import { SubgraphClient } from './subgraph-client.js';
 import { SemanticSearchClient } from './semantic-search-client.js';
 import { normalizeAddress } from '../utils/validation.js';
 import { DEFAULT_SUBGRAPH_URLS } from './contracts.js';
 
+// Internal-only meta type kept temporarily while legacy helpers are being removed.
+type SearchResultMeta = {
+  chains: number[];
+  successfulChains: number[];
+  failedChains: number[];
+  totalResults: number;
+  timing?: { totalMs: number; averagePerChainMs?: number };
+};
+
 /**
  * Simplified indexer that primarily uses subgraph for queries
  * No local indexing or ML capabilities - all queries go through subgraph
  */
 export class AgentIndexer {
+  private static readonly BATCH_SIZE = 1000;
+
   constructor(
     private subgraphClient?: SubgraphClient,
     private subgraphUrlOverrides?: Record<ChainId, string>,
@@ -44,20 +55,14 @@ export class AgentIndexer {
   async searchAgents(
     params: SearchFilters = {},
     options: SearchOptions = {}
-  ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta?: SearchResultMeta }> {
-    const startTime = Date.now();
-    const pageSize = options.pageSize ?? 50;
+  ): Promise<AgentSummary[]> {
     const filters: SearchFilters = params || {};
-
     if (filters.keyword && filters.keyword.trim()) {
-      const out = await this._searchUnifiedWithKeyword(filters, options);
-      const totalMs = Date.now() - startTime;
-      return { ...out, meta: { ...(out.meta || ({} as any)), timing: { totalMs } } };
+      const out = await this._searchUnifiedWithKeyword(filters, options as any);
+      return out.items;
     }
-
-    const out = await this._searchUnifiedNoKeyword(filters, options);
-    const totalMs = Date.now() - startTime;
-    return { ...out, meta: { ...(out.meta || ({} as any)), timing: { totalMs } } };
+    const out = await this._searchUnifiedNoKeyword(filters, options as any);
+    return out.items;
   }
 
   private _parseSort(sort: string[] | undefined, keywordPresent: boolean): { field: string; direction: 'asc' | 'desc' } {
@@ -77,39 +82,27 @@ export class AgentIndexer {
     return [];
   }
 
-  private _parseCursorOffset(cursor?: string): number {
-    if (!cursor) return 0;
-    const n = parseInt(cursor, 10);
-    return Number.isFinite(n) && n >= 0 ? n : 0;
-  }
+  // Pagination removed: cursor helpers deleted.
 
-  private _parsePerChainCursor(chains: ChainId[], cursor?: string): Record<number, number> {
-    const out: Record<number, number> = {};
-    for (const c of chains) out[c] = 0;
-    if (!cursor) return out;
-    try {
-      const parsed = JSON.parse(cursor);
-      if (parsed && typeof parsed === 'object') {
-        for (const c of chains) {
-          const v = (parsed as any)[String(c)];
-          if (typeof v === 'number' && Number.isFinite(v) && v >= 0) out[c] = v;
-        }
-        return out;
-      }
-    } catch {
-      // fallthrough
+  private async _fetchAllAgentsV2(
+    client: SubgraphClient,
+    where: Record<string, unknown>,
+    orderBy: string,
+    orderDirection: 'asc' | 'desc'
+  ): Promise<AgentSummary[]> {
+    const out: AgentSummary[] = [];
+    for (let skip = 0; ; skip += AgentIndexer.BATCH_SIZE) {
+      const page = await client.searchAgentsV2({
+        where,
+        first: AgentIndexer.BATCH_SIZE,
+        skip,
+        orderBy,
+        orderDirection,
+      });
+      out.push(...page);
+      if (page.length < AgentIndexer.BATCH_SIZE) break;
     }
-    // Back-compat: treat numeric cursor as a global offset for single-chain only.
-    const n = parseInt(cursor, 10);
-    if (chains.length === 1 && Number.isFinite(n) && n >= 0) out[chains[0]] = n;
     return out;
-  }
-
-  private _encodePerChainCursor(skips: Record<number, number>): string {
-    const sortedKeys = Object.keys(skips).sort((a, b) => Number(a) - Number(b));
-    const obj: Record<string, number> = {};
-    for (const k of sortedKeys) obj[k] = skips[Number(k)] ?? 0;
-    return JSON.stringify(obj);
   }
 
   private _normalizeAgentIds(filters: SearchFilters, chains: ChainId[]): Record<number, string[]> | undefined {
@@ -302,7 +295,6 @@ export class AgentIndexer {
     const valueHex = valueStr !== undefined ? this._utf8ToHex(String(valueStr)) : undefined;
 
     const first = 1000;
-    const max = 5000;
 
     const perChain = await Promise.all(
       chains.map(async (chainId) => {
@@ -311,7 +303,7 @@ export class AgentIndexer {
         if (!client) return { chainId, ids: [] as string[] };
 
         const ids: string[] = [];
-        for (let skip = 0; skip < max; skip += first) {
+        for (let skip = 0; ; skip += first) {
           const where: any = { key };
           if (valueHex !== undefined) where.value = valueHex;
           const rows = await client.queryAgentMetadata(where, first, skip);
@@ -361,7 +353,6 @@ export class AgentIndexer {
     }
 
     const first = 1000;
-    const max = 5000;
 
     const statsById: Record<string, { sum: number; count: number }> = {};
     const matchedAgentsByChain: Record<number, Set<string>> = {};
@@ -390,7 +381,7 @@ export class AgentIndexer {
 
         const where = baseAnd.length > 0 ? { and: [base, ...baseAnd] } : base;
 
-        for (let skip = 0; skip < max; skip += first) {
+        for (let skip = 0; ; skip += first) {
           const rows = await client.queryFeedbacks(where, first, skip, 'createdAt', 'desc');
           for (const r of rows) {
             if (!r?.agent?.id) continue;
@@ -458,18 +449,16 @@ export class AgentIndexer {
   private async _searchUnifiedNoKeyword(
     filters: SearchFilters,
     options: SearchOptions
-  ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta: SearchResultMeta }> {
+  ): Promise<{ items: AgentSummary[]; meta: SearchResultMeta }> {
     const { field, direction } = this._parseSort(options.sort, false);
     const chains = this._resolveChains(filters, false);
     if (chains.length === 0) {
-      return {
-        items: [],
-        nextCursor: undefined,
+          return {
+            items: [],
         meta: { chains: [], successfulChains: [], failedChains: [], totalResults: 0, timing: { totalMs: 0 } },
       };
     }
 
-    const perChainSkips = this._parsePerChainCursor(chains, options.cursor);
     const agentIdsByChain = this._normalizeAgentIds(filters, chains);
     const metadataIdsByChain = await this._prefilterByMetadata(filters, chains);
     const candidateForFeedback: Record<number, string[]> = {};
@@ -495,13 +484,7 @@ export class AgentIndexer {
         const ids = this._intersectIds(ids0, feedbackIdsByChain?.[chainId]);
         if (ids && ids.length === 0) return { chainId, status: 'success', items: [] };
         const where = this._buildWhereV2(filters, ids);
-        const items = await client.searchAgentsV2({
-          where,
-          first: (options.pageSize ?? 50) + 1,
-          skip: perChainSkips[chainId] ?? 0,
-          orderBy,
-          orderDirection,
-        });
+        const items = await this._fetchAllAgentsV2(client, where, orderBy, orderDirection);
         for (const a of items) {
           const st = feedbackStatsById[a.agentId];
           if (st) a.averageValue = st.avg;
@@ -516,69 +499,26 @@ export class AgentIndexer {
     const successfulChains = results.filter((r) => r.status === 'success').map((r) => r.chainId);
     const failedChains = results.filter((r) => r.status !== 'success').map((r) => r.chainId);
 
-    // k-way merge over already-sorted per-chain arrays
-    const cursors: Record<number, number> = {};
-    const arrays: Record<number, AgentSummary[]> = {};
-    for (const r of results) {
-      arrays[r.chainId] = r.items || [];
-      cursors[r.chainId] = 0;
-    }
-
-    const merged: AgentSummary[] = [];
-    const consumed: Record<number, number> = {};
-    for (const c of chains) consumed[c] = 0;
-
-    while (merged.length < (options.pageSize ?? 50) && true) {
-      let bestChain: number | null = null;
-      let bestItem: AgentSummary | null = null;
-      for (const c of chains) {
-        const idx = cursors[c] ?? 0;
-        const arr = arrays[c] || [];
-        if (idx >= arr.length) continue;
-        const candidate = arr[idx];
-        if (!bestItem || this._compareAgents(candidate, bestItem, field, direction) < 0) {
-          bestItem = candidate;
-          bestChain = c;
-        }
-      }
-      if (!bestItem || bestChain === null) break;
-      merged.push(bestItem);
-      cursors[bestChain] = (cursors[bestChain] ?? 0) + 1;
-      consumed[bestChain] = (consumed[bestChain] ?? 0) + 1;
-    }
-
-    // Determine next cursor: if any chain has remaining data (fetched extra or unconsumed), advance.
-    const hasMore = chains.some((c) => {
-      const arr = arrays[c] || [];
-      const idx = cursors[c] ?? 0;
-      return idx < arr.length || arr.length > (options.pageSize ?? 50);
-    });
-
-    const nextSkips: Record<number, number> = {};
-    for (const c of chains) {
-      nextSkips[c] = (perChainSkips[c] ?? 0) + (consumed[c] ?? 0);
-    }
+    const merged = results.flatMap((r) => r.items || []);
+    merged.sort((a, b) => this._compareAgents(a, b, field, direction));
 
     return {
       items: merged,
-      nextCursor: hasMore ? this._encodePerChainCursor(nextSkips) : undefined,
-      meta: {
+            meta: {
         chains,
         successfulChains,
         failedChains,
-        totalResults: 0,
-        timing: { totalMs: 0 },
-      },
-    };
-  }
+              totalResults: merged.length,
+              timing: { totalMs: 0 },
+            },
+          };
+        }
 
   private async _searchUnifiedWithKeyword(
     filters: SearchFilters,
     options: SearchOptions
-  ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta?: SearchResultMeta }> {
+  ): Promise<{ items: AgentSummary[]; meta?: SearchResultMeta }> {
     const keyword = (filters.keyword || '').trim();
-    const pageSize = options.pageSize ?? 50;
-    const offset = this._parseCursorOffset(options.cursor);
     const chains = this._resolveChains(filters, true);
     const { field, direction } = this._parseSort(options.sort, true);
 
@@ -645,12 +585,8 @@ export class AgentIndexer {
     const sortDir = options.sort && options.sort.length > 0 ? direction : 'desc';
     fetched.sort((a, b) => this._compareAgents(a, b, sortField, sortDir));
 
-    const page = fetched.slice(offset, offset + pageSize);
-    const nextCursor = fetched.length > offset + pageSize ? String(offset + pageSize) : undefined;
-
     return {
-      items: page,
-      nextCursor,
+      items: fetched,
       meta: {
         chains,
         successfulChains,
@@ -828,260 +764,7 @@ export class AgentIndexer {
     return new SubgraphClient(subgraphUrl);
   }
 
-  /**
-   * Parse multi-chain pagination cursor
-   */
-  private _parseMultiChainCursor(cursor?: string): { _global_offset: number } {
-    if (!cursor) {
-      return { _global_offset: 0 };
-    }
-    
-    try {
-      const parsed = JSON.parse(cursor);
-      return {
-        _global_offset: typeof parsed._global_offset === 'number' ? parsed._global_offset : 0,
-      };
-    } catch {
-      // Fallback: try to parse as simple number
-      const offset = parseInt(cursor, 10);
-      return { _global_offset: isNaN(offset) ? 0 : offset };
-    }
-  }
-
-  /**
-   * Create multi-chain pagination cursor
-   */
-  private _createMultiChainCursor(globalOffset: number): string {
-    return JSON.stringify({ _global_offset: globalOffset });
-  }
-
-  /**
-   * Apply cross-chain filters (for fields not supported by subgraph WHERE clause)
-   */
-  private _applyCrossChainFilters(agents: AgentSummary[], params: SearchFilters): AgentSummary[] {
-    return this._filterAgents(agents, params);
-  }
-
-  /**
-   * Deduplicate agents across chains (by name and description)
-   */
-  private _deduplicateAgentsCrossChain(agents: AgentSummary[], params: SearchFilters): AgentSummary[] {
-    // For now, return as-is (no deduplication)
-    // Python SDK has deduplication logic but it's optional
-    return agents;
-  }
-
-  /**
-   * Sort agents across chains
-   */
-  private _sortAgentsCrossChain(agents: AgentSummary[], sort: string[]): AgentSummary[] {
-    if (!sort || sort.length === 0) {
-      return agents;
-    }
-
-    const sortField = sort[0].split(':');
-    const field = sortField[0] || 'createdAt';
-    const direction = (sortField[1] as 'asc' | 'desc') || 'desc';
-
-    return [...agents].sort((a, b) => {
-      let aVal: any;
-      let bVal: any;
-
-      switch (field) {
-        case 'createdAt':
-          aVal = a.extras?.createdAt || 0;
-          bVal = b.extras?.createdAt || 0;
-          break;
-        case 'name':
-          aVal = a.name?.toLowerCase() || '';
-          bVal = b.name?.toLowerCase() || '';
-          break;
-        case 'chainId':
-          aVal = a.chainId;
-          bVal = b.chainId;
-          break;
-        default:
-          aVal = a.extras?.[field] || 0;
-          bVal = b.extras?.[field] || 0;
-      }
-
-      if (aVal < bVal) return direction === 'asc' ? -1 : 1;
-      if (aVal > bVal) return direction === 'asc' ? 1 : -1;
-      return 0;
-    });
-  }
-
-  /**
-   * Search agents across multiple chains in parallel
-   */
-  private async _searchAgentsAcrossChains(
-    params: SearchFilters,
-    sort: string[],
-    pageSize: number,
-    cursor?: string,
-    timeout: number = 30000
-  ): Promise<{ items: AgentSummary[]; nextCursor?: string; meta: SearchResultMeta }> {
-    const startTime = Date.now();
-
-    // Step 1: Determine which chains to query
-    const chainsToQuery = (params.chains && Array.isArray(params.chains) && params.chains.length > 0)
-      ? params.chains
-      : this._getAllConfiguredChains();
-
-    if (chainsToQuery.length === 0) {
-      return {
-        items: [],
-        nextCursor: undefined,
-        meta: {
-          chains: [],
-          successfulChains: [],
-          failedChains: [],
-          totalResults: 0,
-          timing: { totalMs: 0 },
-        },
-      };
-    }
-
-    // Step 2: Parse pagination cursor
-    const chainCursors = this._parseMultiChainCursor(cursor);
-    const globalOffset = chainCursors._global_offset;
-
-    // Step 3: Define async function for querying a single chain
-    const querySingleChain = async (chainId: ChainId): Promise<{
-      chainId: ChainId;
-      status: 'success' | 'error' | 'timeout' | 'unavailable';
-      agents: AgentSummary[];
-      error?: string;
-    }> => {
-      try {
-        const subgraphClient = this._getSubgraphClientForChain(chainId);
-
-        if (!subgraphClient) {
-          return {
-            chainId,
-            status: 'unavailable',
-            agents: [],
-            error: `No subgraph configured for chain ${chainId}`,
-          };
-        }
-
-        // Build search params for this chain (remove chains filter)
-        const chainParams: SearchFilters = { ...params };
-        delete chainParams.chains;
-
-        // Execute subgraph query (fetch extra to allow for filtering/sorting)
-        const agents = await subgraphClient.searchAgents(chainParams, pageSize * 3, 0);
-
-        return {
-          chainId,
-          status: 'success',
-          agents,
-        };
-      } catch (error) {
-        return {
-          chainId,
-          status: 'error',
-          agents: [],
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    };
-
-    // Step 4: Execute all chain queries in parallel with timeout
-    const chainPromises = chainsToQuery.map(chainId => {
-      return Promise.race([
-        querySingleChain(chainId),
-        new Promise<{ chainId: ChainId; status: 'timeout'; agents: AgentSummary[] }>((resolve) => {
-          setTimeout(() => {
-            resolve({
-              chainId,
-              status: 'timeout',
-              agents: [],
-            });
-          }, timeout);
-        }),
-      ]);
-    });
-
-    const chainResults = await Promise.allSettled(chainPromises);
-
-    // Step 5: Extract successful results and track failures
-    const allAgents: AgentSummary[] = [];
-    const successfulChains: ChainId[] = [];
-    const failedChains: ChainId[] = [];
-
-    for (let i = 0; i < chainResults.length; i++) {
-      const result = chainResults[i];
-      const chainId = chainsToQuery[i];
-
-      if (result.status === 'fulfilled') {
-        const chainResult = result.value;
-
-        if (chainResult.status === 'success') {
-          successfulChains.push(chainId);
-          allAgents.push(...chainResult.agents);
-        } else {
-          failedChains.push(chainId);
-        }
-      } else {
-        // Promise rejected
-        failedChains.push(chainId);
-      }
-    }
-
-    // If ALL chains failed, return error metadata
-    if (successfulChains.length === 0) {
-      const queryTime = Date.now() - startTime;
-      return {
-        items: [],
-        nextCursor: undefined,
-        meta: {
-          chains: chainsToQuery,
-          successfulChains: [],
-          failedChains,
-          totalResults: 0,
-          timing: { totalMs: queryTime },
-        },
-      };
-    }
-
-    // Step 6: Apply cross-chain filtering
-    const filteredAgents = this._applyCrossChainFilters(allAgents, params);
-
-    // Step 7: Deduplicate if requested
-    const deduplicatedAgents = this._deduplicateAgentsCrossChain(filteredAgents, params);
-
-    // Step 8: Sort across chains
-    const sortedAgents = this._sortAgentsCrossChain(deduplicatedAgents, sort);
-
-    // Step 9: Paginate
-    const startIdx = globalOffset;
-    const endIdx = startIdx + pageSize;
-    const paginatedAgents = sortedAgents.slice(startIdx, endIdx);
-
-    // Step 10: Calculate next cursor
-    const nextCursor = sortedAgents.length > endIdx
-      ? this._createMultiChainCursor(endIdx)
-      : undefined;
-
-    // Step 11: Build response with metadata
-    const queryTime = Date.now() - startTime;
-
-    return {
-      items: paginatedAgents,
-      nextCursor,
-      meta: {
-        chains: chainsToQuery,
-        successfulChains,
-        failedChains,
-        totalResults: sortedAgents.length,
-        timing: {
-          totalMs: queryTime,
-          averagePerChainMs: chainsToQuery.length > 0 ? Math.floor(queryTime / chainsToQuery.length) : undefined,
-        },
-      },
-    };
-  }
+  // Pagination removed: legacy multi-chain cursor-based search path deleted.
 
   /**
    * (Removed) searchAgentsByReputation

@@ -14,11 +14,11 @@ Agent0 SDK enables you to:
 - **Cross-chain registration** - One-line registration with IPFS nodes, Pinata, Filecoin, or HTTP URIs
 - **Public indexing** - Subgraph indexing both on-chain and IPFS data for fast search and retrieval
 
-## Pre-release (1.5.0)
+## Pre-release (1.5.1)
 
-This branch contains a **1.5.0 pre-release** with a unified agent discovery/search API.
+This branch contains a **1.5.1 pre-release** with a unified agent discovery/search API.
 
-For breaking changes and migration notes, see `release_notes/RELEASE_NOTES_1.5.0-beta.1.md` (and prior notes in `release_notes/`).
+For breaking changes and migration notes, see `release_notes/RELEASE_NOTES_1.5.1-beta.1.md` (and prior notes in `release_notes/`).
 
 **Bug reports & feedback:** GitHub: [Report issues](https://github.com/agent0lab/agent0-ts/issues) | Telegram: [Agent0 channel](https://t.me/agent0kitchen) | Email: team@ag0.xyz
 
@@ -41,7 +41,7 @@ npm install agent0-sdk
 To install the **pre-release** explicitly:
 
 ```bash
-npm install agent0-sdk@1.5.0-beta.1
+npm install agent0-sdk@1.5.1-beta.1
 ```
 
 **Note:** This package is an ESM (ECMAScript Module) package. Use `import` statements in your code:
@@ -165,22 +165,19 @@ const results = await sdk.searchAgents(
     x402support: true,
     feedback: { minValue: 80, tag: 'enterprise', includeRevoked: false },
   },
-  { pageSize: 20, sort: ['updatedAt:desc'] }
+  { sort: ['updatedAt:desc'] }
 );
 
-for (const agent of results.items) {
+for (const agent of results) {
   console.log(`${agent.name}: ${agent.description}`);
   console.log(`  Tools: ${agent.mcpTools?.join(', ')}`);
   console.log(`  Skills: ${agent.a2aSkills?.join(', ')}`);
 }
 
 // Multi-chain search (SDK defaults include 1, 11155111, 137)
-const multiChainResults = await sdk.searchAgents({ active: true, chains: [1, 11155111, 137] }, { pageSize: 20 });
+const multiChainResults = await sdk.searchAgents({ active: true, chains: [1, 11155111, 137] });
 
-console.log(`Found ${multiChainResults.items.length} agents across chains`);
-if (multiChainResults.meta) {
-  console.log(`Successful chains: ${multiChainResults.meta.successfulChains.join(', ')}`);
-}
+console.log(`Found ${multiChainResults.length} agents across chains`);
 
 // Get single agent (read-only, faster)
 // Supports chainId:agentId format
@@ -204,8 +201,7 @@ const allResults = await sdk.searchAgents({
 
 // Search agents by feedback-derived reputation across chains (unified search)
 const reputationResults = await sdk.searchAgents(
-  { chains: [1, 11155111, 137], feedback: { minValue: 80, includeRevoked: false } },
-  { pageSize: 20 }
+  { chains: [1, 11155111, 137], feedback: { minValue: 80, includeRevoked: false } }
 );
 
 // Get agent from specific chain
@@ -342,24 +338,15 @@ const allChainsResult = await sdk.searchAgents({
 
 // Multi-chain feedback-derived reputation search (unified search)
 const reputationResult = await sdk.searchAgents(
-  { chains: [1, 11155111, 137], feedback: { minValue: 80, includeRevoked: false } },
-  { pageSize: 20 }
+  { chains: [1, 11155111, 137], feedback: { minValue: 80, includeRevoked: false } }
 );
 
 // Search all chains for agents with reputation (unified search)
 const allChainsReputation = await sdk.searchAgents(
-  { chains: 'all', feedback: { minValue: 80, includeRevoked: false } },
-  { pageSize: 20 }
+  { chains: 'all', feedback: { minValue: 80, includeRevoked: false } }
 );
 
-// Access metadata about queried chains
-if (result.meta) {
-  console.log(`Queried chains: ${result.meta.chains.join(', ')}`);
-  console.log(`Successful: ${result.meta.successfulChains.join(', ')}`);
-  console.log(`Failed: ${result.meta.failedChains.join(', ')}`);
-  console.log(`Total results: ${result.meta.totalResults}`);
-  console.log(`Query time: ${result.meta.timing.totalMs}ms`);
-}
+// Pagination has been removed; multi-chain results are returned as a flat list.
 ```
 
 ### Default Chain Behavior
@@ -431,11 +418,159 @@ The SDK includes complete OASF v0.8.0 taxonomy files:
 
 Browse these files to find appropriate skill and domain slugs. For more information, see the [OASF specification](https://github.com/agntcy/oasf) and `release_notes/RELEASE_NOTES_0.31.md`.
 
+## Unified Search Reference (Exhaustive)
+
+The unified search API is:
+
+```ts
+const results = await sdk.searchAgents(filters?: SearchFilters, options?: SearchOptions);
+// results: AgentSummary[]
+```
+
+### `FeedbackFilters` (used as `filters.feedback`)
+
+```ts
+export interface FeedbackFilters {
+  hasFeedback?: boolean;
+  hasNoFeedback?: boolean;
+  includeRevoked?: boolean;
+  minValue?: number;
+  maxValue?: number;
+  minCount?: number;
+  maxCount?: number;
+  fromReviewers?: string[];
+  endpoint?: string; // substring match
+  hasResponse?: boolean;
+  tag1?: string;
+  tag2?: string;
+  tag?: string; // matches tag1 OR tag2
+}
+```
+
+| Field | Semantics |
+| --- | --- |
+| `hasFeedback` / `hasNoFeedback` | Filter by whether the agent has any feedback |
+| `includeRevoked` | Include revoked feedback entries in the pool used for filtering |
+| `minValue` / `maxValue` | Threshold on **average value** over feedback matching the other feedback constraints (inclusive) |
+| `minCount` / `maxCount` | Threshold on **count** over feedback matching the other feedback constraints (inclusive) |
+| `fromReviewers` | Only consider feedback from these reviewer wallets |
+| `endpoint` | Only consider feedback whose `endpoint` contains this substring |
+| `hasResponse` | Only consider feedback that has at least one response (if supported) |
+| `tag1` / `tag2` | Only consider feedback matching tag1/tag2 |
+| `tag` | Shorthand: match either tag1 OR tag2 |
+
+### `SearchFilters`
+
+```ts
+export interface SearchFilters {
+  chains?: number[] | 'all';
+  agentIds?: string[];
+
+  name?: string; // substring
+  description?: string; // substring
+
+  owners?: string[];
+  operators?: string[];
+
+  hasRegistrationFile?: boolean;
+  hasWeb?: boolean;
+  hasMCP?: boolean;
+  hasA2A?: boolean;
+  hasOASF?: boolean;
+  hasEndpoints?: boolean;
+
+  webContains?: string;
+  mcpContains?: string;
+  a2aContains?: string;
+  ensContains?: string;
+  didContains?: string;
+
+  walletAddress?: string;
+
+  supportedTrust?: string[];
+  a2aSkills?: string[];
+  mcpTools?: string[];
+  mcpPrompts?: string[];
+  mcpResources?: string[];
+  oasfSkills?: string[];
+  oasfDomains?: string[];
+
+  active?: boolean;
+  x402support?: boolean;
+
+  registeredAtFrom?: Date | string | number;
+  registeredAtTo?: Date | string | number;
+  updatedAtFrom?: Date | string | number;
+  updatedAtTo?: Date | string | number;
+
+  hasMetadataKey?: string;
+  metadataValue?: { key: string; value: string };
+
+  keyword?: string;
+  feedback?: FeedbackFilters;
+}
+```
+
+### `SearchOptions`
+
+```ts
+export interface SearchOptions {
+  sort?: string[];           // e.g. ["averageValue:desc", "updatedAt:desc"]
+  semanticMinScore?: number; // keyword searches only
+  semanticTopK?: number;     // keyword searches only
+}
+```
+
+| Field | Semantics |
+| --- | --- |
+| `sort` | List of sort keys: `"field:asc"` or `"field:desc"` |
+| `semanticMinScore` | Minimum semantic score cutoff (keyword searches only) |
+| `semanticTopK` | Limits semantic prefilter size (semantic endpoint has no cursor) |
+
+### `AgentSummary` (returned items)
+
+```ts
+export interface AgentSummary {
+  chainId: number;
+  agentId: string;
+  name: string;
+  image?: string;
+  description: string;
+  owners: string[];
+  operators: string[];
+  // Endpoint strings (present when advertised; not booleans)
+  mcp?: string;
+  a2a?: string;
+  web?: string;
+  email?: string;
+  ens?: string;
+  did?: string;
+  walletAddress?: string;
+  supportedTrusts: string[];
+  a2aSkills: string[];
+  mcpTools: string[];
+  mcpPrompts: string[];
+  mcpResources: string[];
+  oasfSkills: string[];
+  oasfDomains: string[];
+  active: boolean;
+  x402support: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+  lastActivity?: number;
+  agentURI?: string;
+  agentURIType?: string;
+  feedbackCount?: number;
+  averageValue?: number;
+  semanticScore?: number;
+  extras: Record<string, any>;
+}
+```
+
 ## 🚀 Coming Soon
 
 - Support for validations
 - Enhanced x402 payments
-- Semantic/Vectorial search
 - Advanced reputation aggregation
 - Import/Export to centralized catalogues
 

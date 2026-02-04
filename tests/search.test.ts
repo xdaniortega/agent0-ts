@@ -27,10 +27,10 @@ describeMaybe('Agent Search and Discovery (live)', () => {
 
   it('should get agent by ID', async () => {
     // Search for any available agent first - use pageSize like Python test
-    const results = await sdk.searchAgents({}, { pageSize: 5 }); // pageSize=5 like Python
-    expect(results.items.length).toBeGreaterThan(0);
+    const results = await sdk.searchAgents({}); // returns all
+    expect(results.length).toBeGreaterThan(0);
     
-    const firstAgent = results.items[0];
+    const firstAgent = results[0];
     const agent = await sdk.getAgent(firstAgent.agentId);
 
     expect(agent).toBeTruthy();
@@ -46,10 +46,10 @@ describeMaybe('Agent Search and Discovery (live)', () => {
 
   it('should search agents by name', async () => {
     const results = await sdk.searchAgents({ name: 'Test' });
-    expect(results.items).toBeTruthy();
+    expect(results).toBeTruthy();
 
-    if (results.items.length > 0) {
-      const firstAgent = results.items[0];
+    if (results.length > 0) {
+      const firstAgent = results[0];
       expect(firstAgent.name).toBeTruthy();
       expect(firstAgent.agentId).toBeTruthy();
     }
@@ -57,9 +57,9 @@ describeMaybe('Agent Search and Discovery (live)', () => {
 
   it('should search agents with MCP endpoint', async () => {
     const results = await sdk.searchAgents({ hasMCP: true });
-    expect(results.items).toBeTruthy();
+    expect(results).toBeTruthy();
 
-    results.items.forEach((agent) => {
+    results.forEach((agent) => {
       // AgentSummary has mcp as an endpoint string when present
       expect(typeof agent.mcp).toBe('string');
     });
@@ -67,34 +67,34 @@ describeMaybe('Agent Search and Discovery (live)', () => {
 
   it('should search agents by MCP tools', async () => {
     const results = await sdk.searchAgents({ mcpTools: ['data_analysis'] });
-    expect(results.items).toBeTruthy();
+    expect(results).toBeTruthy();
 
-    if (results.items.length > 0) {
-      const firstAgent = results.items[0];
+    if (results.length > 0) {
+      const firstAgent = results[0];
       expect(firstAgent.mcpTools).toBeDefined();
     }
   });
 
   it('should search agents by A2A skills', async () => {
     const results = await sdk.searchAgents({ a2aSkills: ['javascript'] });
-    expect(results.items).toBeTruthy();
+    expect(results).toBeTruthy();
 
-    if (results.items.length > 0) {
-      const firstAgent = results.items[0];
+    if (results.length > 0) {
+      const firstAgent = results[0];
       expect(firstAgent.a2aSkills).toBeDefined();
     }
   });
 
   it('should search agents by ENS domain', async () => {
     const results = await sdk.searchAgents({ ensContains: 'test' });
-    expect(results.items).toBeTruthy();
+    expect(results).toBeTruthy();
   });
 
   it('should search only active agents', async () => {
-    const results = await sdk.searchAgents({ active: true }, { pageSize: 10 });
-    expect(results.items).toBeTruthy();
+    const results = await sdk.searchAgents({ active: true });
+    expect(results).toBeTruthy();
 
-    results.items.forEach((agent) => {
+    results.forEach((agent) => {
       // AgentSummary active is a boolean property
       expect(typeof agent.active === 'boolean').toBe(true);
       if (typeof agent.active === 'boolean') {
@@ -108,38 +108,22 @@ describeMaybe('Agent Search and Discovery (live)', () => {
       mcpTools: ['communication'],
       a2aSkills: ['python'],
     });
-    expect(results.items).toBeTruthy();
+    expect(results).toBeTruthy();
   });
 
   it('should search agents by reputation', async () => {
     const results = await sdk.searchAgents({ feedback: { minValue: 80 } });
-    expect(results.items).toBeTruthy();
+    expect(results).toBeTruthy();
   });
 
-  it('should handle pagination', async () => {
-    const page1 = await sdk.searchAgents({ active: true }, { pageSize: 5 });
-    expect(page1.items.length).toBeLessThanOrEqual(5);
-
-    if (page1.nextCursor && page1.items.length > 0) {
-      const page2 = await sdk.searchAgents({ active: true }, { pageSize: 5, cursor: page1.nextCursor });
-      expect(page2.items).toBeTruthy();
-
-      // Verify no duplicates between pages (only if we have results)
-      if (page1.items.length > 0 && page2.items.length > 0) {
-        const ids1 = page1.items.map((a) => a.agentId);
-        const ids2 = page2.items.map((a) => a.agentId);
-        const duplicates = ids1.filter((id) => ids2.includes(id));
-        expect(duplicates.length).toBe(0);
-      }
-    }
-  });
+  // Pagination removed: searchAgents now returns all results.
 
   it('should search agents by single owner address', async () => {
     // First get a sample agent with an owner
-    const allAgents = await sdk.searchAgents({}, { pageSize: 10 });
-    expect(allAgents.items.length).toBeGreaterThan(0);
+    const allAgents = await sdk.searchAgents({});
+    expect(allAgents.length).toBeGreaterThan(0);
 
-    const agentWithOwner = allAgents.items.find(a => a.owners && a.owners.length > 0);
+    const agentWithOwner = allAgents.find((a) => a.owners && a.owners.length > 0);
     if (!agentWithOwner) {
       console.log('No agents with owners found, skipping test');
       return;
@@ -149,10 +133,10 @@ describeMaybe('Agent Search and Discovery (live)', () => {
 
     // Search by owner
     const ownerResults = await sdk.searchAgents({ owners: [testOwner] });
-    expect(ownerResults.items.length).toBeGreaterThan(0);
+    expect(ownerResults.length).toBeGreaterThan(0);
 
     // Verify all results have the correct owner
-    ownerResults.items.forEach(agent => {
+    ownerResults.forEach((agent) => {
       const hasOwner = agent.owners.some(owner =>
         owner.toLowerCase() === testOwner.toLowerCase()
       );
@@ -162,8 +146,8 @@ describeMaybe('Agent Search and Discovery (live)', () => {
 
   it('should search agents by multiple owner addresses', async () => {
     // Get sample agents with owners
-    const allAgents = await sdk.searchAgents({}, { pageSize: 20 });
-    const agentsWithOwners = allAgents.items.filter(a => a.owners && a.owners.length > 0);
+    const allAgents = await sdk.searchAgents({});
+    const agentsWithOwners = allAgents.filter((a) => a.owners && a.owners.length > 0);
 
     if (agentsWithOwners.length < 2) {
       console.log('Not enough agents with owners found, skipping test');
@@ -175,10 +159,10 @@ describeMaybe('Agent Search and Discovery (live)', () => {
 
     // Search by multiple owners
     const results = await sdk.searchAgents({ owners: [owner1, owner2] });
-    expect(results.items.length).toBeGreaterThan(0);
+    expect(results.length).toBeGreaterThan(0);
 
     // Verify all results have at least one of the specified owners
-    results.items.forEach(agent => {
+    results.forEach((agent) => {
       const hasMatchingOwner = agent.owners.some(owner =>
         owner.toLowerCase() === owner1.toLowerCase() ||
         owner.toLowerCase() === owner2.toLowerCase()
@@ -189,8 +173,8 @@ describeMaybe('Agent Search and Discovery (live)', () => {
 
   it('should search agents by operator addresses', async () => {
     // First get a sample agent with an operator
-    const allAgents = await sdk.searchAgents({}, { pageSize: 50 });
-    const agentWithOperator = allAgents.items.find(a => a.operators && a.operators.length > 0);
+    const allAgents = await sdk.searchAgents({});
+    const agentWithOperator = allAgents.find((a) => a.operators && a.operators.length > 0);
 
     if (!agentWithOperator) {
       console.log('No agents with operators found, skipping test');
@@ -201,10 +185,10 @@ describeMaybe('Agent Search and Discovery (live)', () => {
 
     // Search by operator
     const operatorResults = await sdk.searchAgents({ operators: [testOperator] });
-    expect(operatorResults.items.length).toBeGreaterThan(0);
+    expect(operatorResults.length).toBeGreaterThan(0);
 
     // Verify all results have the correct operator
-    operatorResults.items.forEach(agent => {
+    operatorResults.forEach((agent) => {
       const hasOperator = agent.operators.some(op =>
         op.toLowerCase() === testOperator.toLowerCase()
       );
