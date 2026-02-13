@@ -1,6 +1,6 @@
 {
-  "name": "agent0-sdk",
-  "version": "1.5.3",
+  "name": "@blockbyvlog/agent0-sdk",
+  "version": "1.5.4",
   "description": "TypeScript SDK for agent portability, discovery and trust based on ERC-8004",
   "type": "module",
   "main": "dist/index.js",
@@ -35,18 +35,23 @@
     "agent",
     "blockchain",
     "ethereum",
+    "arbitrum",
     "ipfs",
-    "reputation"
+    "reputation",
+    "@blockbyvlog"
   ],
-  "author": "Agent0 Team <team@ag0.xyz>",
+  "author": {
+    "name": "Daniel Ortega",
+    "url": "https://x.com/blockbyvlog"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/agent0lab/agent0-ts"
+    "url": "https://github.com/xdaniortega/agent0-ts"
   },
-  "homepage": "https://sdk.ag0.xyz",
+  "homepage": "https://github.com/xdaniortega/agent0-ts#readme",
   "bugs": {
-    "url": "https://github.com/agent0lab/agent0-ts/issues"
+    "url": "https://github.com/xdaniortega/agent0-ts/issues"
   },
   "files": [
     "dist/**/*",

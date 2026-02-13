@@ -508,6 +508,18 @@ export const DEFAULT_REGISTRIES: Record<ChainId, Record<string, string>> = {
     REPUTATION: '0x8004B663056A597Dffe9eCcC1965A193B7388713',
     // VALIDATION: not deployed in defaults yet
   },
+  42161: {
+    // Arbitrum Mainnet
+    IDENTITY: '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432',
+    REPUTATION: '0x8004BAa17C55a88189AE136b182e5fdA19dE9b63',
+    // VALIDATION: indexing currently disabled in subgraph; set when deployed/enabled
+  },
+  421614: {
+    // Arbitrum Sepolia
+    IDENTITY: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
+    REPUTATION: '0x8004B663056A597Dffe9eCcC1965A193B7388713',
+    // VALIDATION: not deployed in defaults yet
+  },
 };
 
 /**
@@ -522,5 +534,8 @@ export const DEFAULT_SUBGRAPH_URLS: Record<ChainId, string> = {
   84532:
     'https://gateway.thegraph.com/api/536c6d8572876cabea4a4ad0fa49aa57/subgraphs/id/4yYAvQLFjBhBtdRCY7eUWo181VNoTSLLFd5M7FXQAi6u', // Base Sepolia
   137: 'https://gateway.thegraph.com/api/782d61ed390e625b8867995389699b4c/subgraphs/id/9q16PZv1JudvtnCAf44cBoxg82yK9SSsFvrjCY9xnneF', // Polygon Mainnet
+  // Arbitrum chains - subgraph URLs to be added after deployment
+  // 42161: 'TBD', // Arbitrum Mainnet
+  // 421614: 'TBD', // Arbitrum Sepolia
 };
 
