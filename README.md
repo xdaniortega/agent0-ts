@@ -174,8 +174,8 @@ for (const agent of results) {
   console.log(`  Skills: ${agent.a2aSkills?.join(', ')}`);
 }
 
-// Multi-chain search (SDK defaults include 1, 11155111, 137)
-const multiChainResults = await sdk.searchAgents({ active: true, chains: [1, 11155111, 137] });
+// Multi-chain search (SDK defaults include 1, 8453, 137, 42161, 11155111, 84532, 421614)
+const multiChainResults = await sdk.searchAgents({ active: true, chains: [1, 8453, 137, 42161] });
 
 console.log(`Found ${multiChainResults.length} agents across chains`);
 
@@ -300,9 +300,11 @@ The SDK supports querying agents across multiple blockchain networks:
 
 - **Ethereum Mainnet** (Chain ID: `1`)
 - **Base Mainnet** (Chain ID: `8453`)
+- **Polygon Mainnet** (Chain ID: `137`)
+- **Arbitrum Mainnet** (Chain ID: `42161`)
 - **Ethereum Sepolia** (Chain ID: `11155111`)
 - **Base Sepolia** (Chain ID: `84532`)
-- **Polygon Mainnet** (Chain ID: `137`)
+- **Arbitrum Sepolia** (Chain ID: `421614`)
 
 ### Chain-Agnostic Agent IDs
 
@@ -329,7 +331,7 @@ Search across multiple chains simultaneously:
 // Search across multiple chains
 const result = await sdk.searchAgents({
   active: true,
-  chains: [1, 8453, 11155111, 84532, 137]  // Ethereum Mainnet, Base Mainnet, Ethereum Sepolia, Base Sepolia, Polygon Mainnet
+  chains: [1, 8453, 137, 42161, 11155111, 84532, 421614]  // All supported chains
 });
 
 // Search all configured chains
@@ -340,7 +342,7 @@ const allChainsResult = await sdk.searchAgents({
 
 // Multi-chain feedback-derived reputation search (unified search)
 const reputationResult = await sdk.searchAgents(
-  { chains: [1, 8453, 11155111, 84532, 137], feedback: { minValue: 80, includeRevoked: false } }
+  { chains: [1, 8453, 137, 42161, 11155111, 84532, 421614], feedback: { minValue: 80, includeRevoked: false } }
 );
 
 // Search all chains for agents with reputation (unified search)
