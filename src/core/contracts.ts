@@ -534,8 +534,7 @@ export const DEFAULT_SUBGRAPH_URLS: Record<ChainId, string> = {
   84532:
     'https://gateway.thegraph.com/api/536c6d8572876cabea4a4ad0fa49aa57/subgraphs/id/4yYAvQLFjBhBtdRCY7eUWo181VNoTSLLFd5M7FXQAi6u', // Base Sepolia
   137: 'https://gateway.thegraph.com/api/782d61ed390e625b8867995389699b4c/subgraphs/id/9q16PZv1JudvtnCAf44cBoxg82yK9SSsFvrjCY9xnneF', // Polygon Mainnet
-  // Arbitrum chains - subgraph URLs to be added after deployment
   // 42161: 'TBD', // Arbitrum Mainnet
-  // 421614: 'TBD', // Arbitrum Sepolia
+  421614: 'https://api.studio.thegraph.com/query/1741985/erc-8004-arbitrum-testnet/version/latest', // Arbitrum Sepolia
 };
 
