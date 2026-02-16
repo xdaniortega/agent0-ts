@@ -300,9 +300,11 @@ The SDK supports querying agents across multiple blockchain networks:
 
 - **Ethereum Mainnet** (Chain ID: `1`)
 - **Base Mainnet** (Chain ID: `8453`)
+- **Polygon Mainnet** (Chain ID: `137`)
+- **Arbitrum One** (Chain ID: `42161`)
 - **Ethereum Sepolia** (Chain ID: `11155111`)
 - **Base Sepolia** (Chain ID: `84532`)
-- **Polygon Mainnet** (Chain ID: `137`)
+- **Arbitrum Sepolia** (Chain ID: `421614`)
 
 ### Chain-Agnostic Agent IDs
 
@@ -331,7 +333,6 @@ const result = await sdk.searchAgents({
   active: true,
   chains: [1, 8453, 11155111, 84532, 137]  // Ethereum Mainnet, Base Mainnet, Ethereum Sepolia, Base Sepolia, Polygon Mainnet
 });
-
 // Search all configured chains
 const allChainsResult = await sdk.searchAgents({
   active: true,
