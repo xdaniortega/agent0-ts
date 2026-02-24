@@ -1,6 +1,6 @@
-# Agent0 SDK
+# Agent0 SDK - Alternative Indexing Fork
 
-**TypeScript SDK for Agentic Economies** — Multi-chain agent registry, discovery, and reputation system powered by ERC-8004
+Agent0 is the TypeScript SDK for agentic economies. It enables agents to register, advertise their capabilities and how to communicate with them, and give each other feedback and reputation signals. All this using blockchain infrastructure (ERC-8004) and decentralized storage, enabling permissionless discovery without relying on proprietary catalogues or intermediaries.
 
 🌐 **Supported Networks:** Ethereum • Arbitrum • Base • Polygon | (Mainnet + Testnets)  
 ⚡ **Dual Indexing:** The Graph Subgraph *or* Direct RPC (works without subgraph)  
