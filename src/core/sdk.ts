@@ -21,6 +21,8 @@ import type { ChainClient, EIP1193Provider as Eip1193Provider } from './chain-cl
 import { ViemChainClient } from './viem-chain-client.js';
 import { IPFSClient, type IPFSClientConfig } from './ipfs-client.js';
 import { SubgraphClient } from './subgraph-client.js';
+import type { DataSourceClient } from './data-source-client.js';
+import { RpcIndexerClient } from './rpc-indexer-client.js';
 import { FeedbackManager } from './feedback-manager.js';
 import { AgentIndexer } from './indexer.js';
 import { Agent } from './agent.js';
@@ -56,6 +58,30 @@ export interface SDKConfig {
   // Subgraph configuration
   subgraphUrl?: string;
   subgraphOverrides?: Record<ChainId, string>;
+  // Indexer backend
+  /**
+   * Data indexer backend for reading feedback and agent data.
+   * - 'subgraph' (default): Uses The Graph subgraph. Requires a subgraphUrl or a supported chainId.
+   * - 'rpc': Uses eth_getLogs via the configured rpcUrl. Works with Alchemy, Infura, or any standard RPC.
+   *   Supports feedback data only — agent search/discovery methods will throw.
+   */
+  indexer?: 'subgraph' | 'rpc';
+  /**
+   * Power-user escape hatch: provide a fully custom DataSourceClient instance.
+   * When set, takes precedence over `indexer` and `subgraphUrl`.
+   */
+  dataSource?: DataSourceClient;
+  /**
+   * When indexer='rpc', the earliest block to start scanning from.
+   * Strongly recommended: set this to the REPUTATION_REGISTRY deployment block
+   * to avoid scanning from genesis (very slow).
+   */
+  rpcIndexerFromBlock?: bigint;
+  /**
+   * When indexer='rpc', max block range per eth_getLogs call.
+   * Defaults to 2000 (Alchemy safe default).
+   */
+  rpcIndexerMaxBlockRange?: bigint;
 }
 
 /**
@@ -90,27 +116,53 @@ export class SDK {
     const defaultRegistries = DEFAULT_REGISTRIES[config.chainId] || {};
     this._registries = { ...defaultRegistries, ...(registryOverrides[config.chainId] || {}) };
 
-    // Resolve subgraph URL
+    // Resolve subgraph URL overrides (always populate for multi-chain fallback)
     if (config.subgraphOverrides) {
       Object.assign(this._subgraphUrls, config.subgraphOverrides);
     }
 
-    let resolvedSubgraphUrl: string | undefined;
-    if (config.chainId in this._subgraphUrls) {
-      resolvedSubgraphUrl = this._subgraphUrls[config.chainId];
-    } else if (config.chainId in DEFAULT_SUBGRAPH_URLS) {
-      resolvedSubgraphUrl = DEFAULT_SUBGRAPH_URLS[config.chainId];
-    } else if (config.subgraphUrl) {
-      resolvedSubgraphUrl = config.subgraphUrl;
-    }
+    // Resolve data source
+    let resolvedDataSource: DataSourceClient | undefined;
 
-    // Initialize subgraph client if URL available
-    if (resolvedSubgraphUrl) {
-      this._subgraphClient = new SubgraphClient(resolvedSubgraphUrl);
+    if (config.dataSource) {
+      // Power-user path: use provided instance directly
+      resolvedDataSource = config.dataSource;
+    } else if (config.indexer === 'rpc') {
+      // RPC indexer path: use eth_getLogs via rpcUrl
+      const reputationAddress = this._registries['REPUTATION'] as Address | undefined;
+      if (!reputationAddress) {
+        throw new Error(
+          `indexer='rpc' requires a REPUTATION registry address for chainId=${config.chainId}. ` +
+            `Add it via registryOverrides or use a supported chainId.`
+        );
+      }
+      resolvedDataSource = new RpcIndexerClient({
+        chainId: config.chainId,
+        rpcUrl: config.rpcUrl,
+        reputationRegistryAddress: reputationAddress,
+        fromBlock: config.rpcIndexerFromBlock,
+        maxBlockRange: config.rpcIndexerMaxBlockRange,
+      });
+      // _subgraphClient intentionally left undefined in rpc mode
+    } else {
+      // Default subgraph path
+      let resolvedSubgraphUrl: string | undefined;
+      if (config.chainId in this._subgraphUrls) {
+        resolvedSubgraphUrl = this._subgraphUrls[config.chainId];
+      } else if (config.chainId in DEFAULT_SUBGRAPH_URLS) {
+        resolvedSubgraphUrl = DEFAULT_SUBGRAPH_URLS[config.chainId as keyof typeof DEFAULT_SUBGRAPH_URLS];
+      } else if (config.subgraphUrl) {
+        resolvedSubgraphUrl = config.subgraphUrl;
+      }
+
+      if (resolvedSubgraphUrl) {
+        this._subgraphClient = new SubgraphClient(resolvedSubgraphUrl);
+        resolvedDataSource = this._subgraphClient;
+      }
     }
 
     // Initialize indexer
-    this._indexer = new AgentIndexer(this._subgraphClient, this._subgraphUrls, this._chainId);
+    this._indexer = new AgentIndexer(resolvedDataSource, this._subgraphUrls, this._chainId);
 
     // Initialize IPFS client
     if (config.ipfs) {
@@ -123,10 +175,10 @@ export class SDK {
       this._ipfsClient,
       undefined, // reputationRegistryAddress - will be set lazily
       undefined, // identityRegistryAddress - will be set lazily
-      this._subgraphClient
+      resolvedDataSource
     );
 
-    // Set subgraph client getter for multi-chain support
+    // Set data source getter for multi-chain support
     this._feedbackManager.setSubgraphClientGetter(
       (chainId) => this.getSubgraphClient(chainId),
       this._chainId
@@ -432,23 +484,23 @@ export class SDK {
     const agents = mergedAgents.length > 0 ? Array.from(new Set(mergedAgents)) : undefined;
 
     const hasAnyFilter =
-      (agents?.length ?? 0) > 0 ||
-      (filters.reviewers?.length ?? 0) > 0 ||
-      (filters.tags?.length ?? 0) > 0 ||
-      (filters.capabilities?.length ?? 0) > 0 ||
-      (filters.skills?.length ?? 0) > 0 ||
-      (filters.tasks?.length ?? 0) > 0 ||
-      (filters.names?.length ?? 0) > 0 ||
-      options.minValue !== undefined ||
-      options.maxValue !== undefined;
+    (agents?.length ?? 0) > 0 ||
+    (filters.reviewers?.length ?? 0) > 0 ||
+    (filters.tags?.length ?? 0) > 0 ||
+    (filters.capabilities?.length ?? 0) > 0 ||
+    (filters.skills?.length ?? 0) > 0 ||
+    (filters.tasks?.length ?? 0) > 0 ||
+    (filters.names?.length ?? 0) > 0 ||
+    options.minValue !== undefined ||
+    options.maxValue !== undefined;
 
-    // Previously, `agentId` was required so a fully-empty search wasn't possible.
-    // Keep behavior safe by rejecting empty searches that would otherwise return arbitrary global results.
-    if (!hasAnyFilter) {
-      throw new Error(
-        'searchFeedback requires at least one filter (agentId/agents/reviewers/tags/capabilities/skills/tasks/names/minValue/maxValue).'
-      );
-    }
+  // Previously, `agentId` was required so a fully-empty search wasn't possible.
+  // Keep behavior safe by rejecting empty searches that would otherwise return arbitrary global results.
+  if (!hasAnyFilter) {
+    throw new Error(
+      'searchFeedback requires at least one filter (agentId/agents/reviewers/tags/capabilities/skills/tasks/names/minValue/maxValue).'
+    );
+  }
 
     const params: SearchFeedbackParams = {
       agents,

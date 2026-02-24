@@ -11,7 +11,7 @@ import type {
 import type { AgentId, Address, URI, Timestamp, IdemKey } from '../models/types.js';
 import type { ChainClient, TransactionOptions } from './chain-client.js';
 import type { IPFSClient } from './ipfs-client.js';
-import type { SubgraphClient } from './subgraph-client.js';
+import type { DataSourceClient } from './data-source-client.js';
 import { parseAgentId, formatAgentId, formatFeedbackId, parseFeedbackId } from '../utils/id-format.js';
 import { DEFAULTS } from '../utils/constants.js';
 import { REPUTATION_REGISTRY_ABI } from './contracts.js';
@@ -28,7 +28,7 @@ const GIVE_FEEDBACK_GAS_LIMIT = 300_000n;
  * Manages feedback operations for the Agent0 SDK
  */
 export class FeedbackManager {
-  private getSubgraphClientForChain?: (chainId?: number) => SubgraphClient | undefined;
+  private getSubgraphClientForChain?: (chainId?: number) => DataSourceClient | undefined;
   private defaultChainId?: number;
 
   constructor(
@@ -36,14 +36,14 @@ export class FeedbackManager {
     private ipfsClient?: IPFSClient,
     private reputationRegistryAddress?: Address,
     private identityRegistryAddress?: Address,
-    private subgraphClient?: SubgraphClient
+    private subgraphClient?: DataSourceClient
   ) {}
 
   /**
-   * Set function to get subgraph client for a specific chain (for multi-chain support)
+   * Set function to get data source client for a specific chain (for multi-chain support)
    */
   setSubgraphClientGetter(
-    getter: (chainId?: number) => SubgraphClient | undefined,
+    getter: (chainId?: number) => DataSourceClient | undefined,
     defaultChainId: number
   ): void {
     this.getSubgraphClientForChain = getter;
@@ -278,7 +278,7 @@ export class FeedbackManager {
 
   /**
    * Get single feedback with responses
-   * Currently only supports blockchain query - subgraph support coming soon
+   * Currently only supports blockchain query - data source support coming soon
    */
   async getFeedback(
     agentId: AgentId,
@@ -391,12 +391,12 @@ export class FeedbackManager {
 
   /**
    * Search feedback with filters
-   * Uses subgraph if available, otherwise returns empty array
+   * Uses data source (subgraph or RPC indexer) if available, otherwise returns empty array
    * Supports chainId:agentId format in params.agents
    */
   async searchFeedback(params: SearchFeedbackParams): Promise<Feedback[]> {
-    // Determine which subgraph client to use based on agentId chainId
-    let subgraphClientToUse = this.subgraphClient;
+    // Determine which data source client to use based on agentId chainId
+    let dataSourceClientToUse = this.subgraphClient;
     let formattedAgents: string[] | undefined;
     
     // If agents are specified, check if they have chainId prefixes
@@ -410,8 +410,8 @@ export class FeedbackManager {
         const parsed = parseAgentId(firstAgentId);
         chainId = parsed.chainId;
         fullAgentId = firstAgentId;
-        // Get subgraph client for the specified chain
-        subgraphClientToUse = this.getSubgraphClientForChain(chainId);
+        // Get data source client for the specified chain
+        dataSourceClientToUse = this.getSubgraphClientForChain(chainId);
         // Format all agentIds to ensure they have chainId prefix
         formattedAgents = params.agents.map(agentId => {
           if (agentId.includes(':')) {
@@ -435,15 +435,15 @@ export class FeedbackManager {
         } else {
           formattedAgents = params.agents;
         }
-        // Don't change subgraphClientToUse - use the default one
+        // Don't change dataSourceClientToUse - use the default one
       }
     } else {
       formattedAgents = params.agents;
     }
 
-    if (!subgraphClientToUse) {
-      // Fallback not implemented (would require blockchain queries)
-      // For now, return empty if subgraph unavailable
+    if (!dataSourceClientToUse) {
+      // Fallback not implemented (would require direct blockchain queries)
+      // For now, return empty if data source unavailable
       return [];
     }
 
@@ -463,7 +463,7 @@ export class FeedbackManager {
     };
 
     for (let skip = 0; ; skip += first) {
-      const feedbacksData = await subgraphClientToUse.searchFeedback(queryParams, first, skip, 'createdAt', 'desc');
+      const feedbacksData = await dataSourceClientToUse.searchFeedback(queryParams, first, skip, 'createdAt', 'desc');
       for (const fbData of feedbacksData) {
         // Parse agentId from feedback ID
         const feedbackId = fbData.id;
@@ -482,7 +482,7 @@ export class FeedbackManager {
           feedbackIdx = 1;
         }
 
-        const feedback = this._mapSubgraphFeedbackToModel(fbData, agentIdStr, clientAddr, feedbackIdx);
+        const feedback = this._mapFeedbackDataToModel(fbData, agentIdStr, clientAddr, feedbackIdx);
         feedbacks.push(feedback);
       }
       if (feedbacksData.length < first) break;
@@ -492,9 +492,10 @@ export class FeedbackManager {
   }
 
   /**
-   * Map subgraph feedback data to Feedback model
+   * Map feedback data from data source to Feedback model
+   * Works with both subgraph and RPC indexer data formats
    */
-  private _mapSubgraphFeedbackToModel(
+  private _mapFeedbackDataToModel(
     feedbackData: any,
     agentId: AgentId,
     clientAddress: Address,
@@ -666,16 +667,16 @@ export class FeedbackManager {
     let fullAgentId: string;
     let tokenId: number;
     
-    let subgraphClient: SubgraphClient | undefined;
+    let dataSourceClient: DataSourceClient | undefined;
     
     if (agentId.includes(':')) {
       const parsed = parseAgentId(agentId);
       chainId = parsed.chainId;
       tokenId = parsed.tokenId;
       fullAgentId = agentId;
-      // Get subgraph client for the specified chain
+      // Get data source client for the specified chain
       if (this.getSubgraphClientForChain) {
-        subgraphClient = this.getSubgraphClientForChain(chainId);
+        dataSourceClient = this.getSubgraphClientForChain(chainId);
       }
     } else {
       // Use default chain
@@ -687,16 +688,16 @@ export class FeedbackManager {
         // Fallback: use agentId as-is if no default chain
         fullAgentId = agentId;
       }
-      // Use default subgraph client
-      subgraphClient = this.subgraphClient;
+      // Use default data source client
+      dataSourceClient = this.subgraphClient;
     }
 
-    // Try subgraph first if available
-    if (subgraphClient) {
+    // Try data source (subgraph or RPC indexer) first if available
+    if (dataSourceClient) {
       try {
-        // Use subgraph to calculate reputation
+        // Use data source to calculate reputation
         // Query feedback for this agent
-        const feedbacksData = await subgraphClient.searchFeedback(
+        const feedbacksData = await dataSourceClient.searchFeedback(
             {
               agents: [fullAgentId],
             },
@@ -743,7 +744,7 @@ export class FeedbackManager {
 
         return { count: 0, averageValue: 0 };
       } catch (error) {
-        // Fall through to blockchain query if subgraph fails
+        // Fall through to blockchain query if data source fails
       }
     }
 
@@ -758,7 +759,7 @@ export class FeedbackManager {
       throw new Error(
         `Blockchain reputation summary not supported for chain ${chainId}. ` +
         `SDK is configured for chain ${this.defaultChainId}. ` +
-        `Use subgraph-based summary instead.`
+        `Use data source (subgraph or RPC indexer) based summary instead.`
       );
     }
 

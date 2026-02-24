@@ -17,7 +17,7 @@ dotenv.config({ path: monorepoEnvPath, override: false });
 export const CHAIN_ID = parseInt(process.env.CHAIN_ID || '11155111', 10);
 export const RPC_URL =
   process.env.RPC_URL ||
-  'https://eth-sepolia.g.alchemy.com/v2/7nkA4bJ0tKWcl2-5Wn15c5eRdpGZ8DDr';
+  'https://eth-sepolia.g.alchemy.com/v2/YOUR_ALCHEMY_KEY';
 export const AGENT_PRIVATE_KEY = process.env.AGENT_PRIVATE_KEY || '';
 
 // IPFS Configuration (Pinata)

@@ -1,6 +1,14 @@
 # Agent0 SDK
 
-Agent0 is the TypeScript SDK for agentic economies. It enables agents to register, advertise their capabilities and how to communicate with them, and give each other feedback and reputation signals. All this using blockchain infrastructure (ERC-8004) and decentralized storage, enabling permissionless discovery without relying on proprietary catalogues or intermediaries.
+**TypeScript SDK for Agentic Economies** — Multi-chain agent registry, discovery, and reputation system powered by ERC-8004
+
+🌐 **Supported Networks:** Ethereum • Arbitrum • Base • Polygon | (Mainnet + Testnets)  
+⚡ **Dual Indexing:** The Graph Subgraph *or* Direct RPC (works without subgraph)  
+🔗 **Cross-chain:** Unified agent IDs, multi-chain search, and reputation aggregation
+
+---
+
+Agent0 enables agents to register, advertise their capabilities and how to communicate with them, and give each other feedback and reputation signals. All this using blockchain infrastructure (ERC-8004) and decentralized storage, enabling permissionless discovery without relying on proprietary catalogues or intermediaries.
 
 ## What Does Agent0 SDK Do?
 
@@ -12,13 +20,33 @@ Agent0 SDK enables you to:
 - **Enable permissionless discovery** - Make your agent discoverable by other agents and platforms using rich search by attributes, capabilities, skills, tools, tasks, and x402 support
 - **Build reputation** - Give and receive feedback, retrieve feedback history, and search agents by reputation with cryptographic authentication
 - **Cross-chain registration** - One-line registration with IPFS nodes, Pinata, Filecoin, or HTTP URIs
-- **Public indexing** - Subgraph indexing both on-chain and IPFS data for fast search and retrieval
+- **Flexible indexing** - Use The Graph subgraph (default) *or* direct RPC queries (works without subgraph)
 
-## Release (1.5.3)
+## Supported Networks
 
-This release includes the unified agent discovery/search API.
+| Network | Chain ID | Mainnet/Testnet | Subgraph | RPC Indexer |
+|---------|----------|-----------------|----------|-------------|
+| **Ethereum Mainnet** | `1` | Mainnet | ✅ | ✅ |
+| **Arbitrum One** | `42161` | Mainnet | ❌ Not available | ✅ **Required** |
+| **Base Mainnet** | `8453` | Mainnet | ✅ | ✅ |
+| **Polygon Mainnet** | `137` | Mainnet | ✅ | ✅ |
+| **Ethereum Sepolia** | `11155111` | Testnet | ✅ | ✅ |
+| **Arbitrum Sepolia** | `421614` | Testnet | ✅ | ✅ |
+| **Base Sepolia** | `84532` | Testnet | ✅ | ✅ |
 
-For breaking changes and migration notes, see `release_notes/RELEASE_NOTES_1.5.3.md` (and prior notes in `release_notes/`).
+**✅ Available** | **❌ Not Available** | **⚠️ Important:** Arbitrum networks require `indexer: 'rpc'` configuration
+
+## Release (1.5.6)
+
+This release adds Arbitrum network support with both subgraph and RPC indexing options.
+
+**New in 1.5.6:**
+- ✅ Arbitrum One (42161) and Arbitrum Sepolia (421614) subgraph support
+- ✅ RPC Indexer with `getAgentById` and `queryAgentMetadata` implementations
+- ✅ Flexible indexing: choose between The Graph subgraph (default) or direct RPC
+- 📖 See `docs/RPC_INDEXER_LIMITATIONS.md` for RPC indexer capabilities
+
+For breaking changes and migration notes from previous versions, see `release_notes/` folder.
 
 **Bug reports & feedback:** GitHub: [Report issues](https://github.com/agent0lab/agent0-ts/issues) | Telegram: [Agent0 channel](https://t.me/agent0kitchen) | Email: team@ag0.xyz
 
@@ -29,7 +57,7 @@ For breaking changes and migration notes, see `release_notes/RELEASE_NOTES_1.5.3
 - Node.js 22 or higher
 - npm or yarn package manager
 - Private key for signing transactions (or run in read-only mode)
-- Access to an Ethereum RPC endpoint (e.g., Alchemy, Infura)
+- Access to an RPC endpoint (e.g., Alchemy, Infura, QuickNode)
 - (Optional) IPFS provider account (Pinata, Filecoin, or local IPFS node)
 
 ### Install from npm
@@ -41,7 +69,7 @@ npm install agent0-sdk
 To install a specific version explicitly:
 
 ```bash
-npm install agent0-sdk@1.5.3
+npm install agent0-sdk@1.5.6
 ```
 
 **Note:** This package is an ESM (ECMAScript Module) package. Use `import` statements in your code:
@@ -63,12 +91,12 @@ npm run build
 
 ## Quick Start
 
-### 1. Initialize SDK (server-side)
+### 1. Initialize SDK (Default: Subgraph Indexer)
 
 ```typescript
 import { SDK } from 'agent0-sdk';
 
-// Initialize SDK with IPFS and subgraph
+// Initialize SDK with IPFS and subgraph (default indexer)
 const sdk = new SDK({
   chainId: 11155111, // Ethereum Sepolia testnet (use 1 for Ethereum Mainnet)
   rpcUrl: process.env.RPC_URL!,
@@ -78,6 +106,45 @@ const sdk = new SDK({
   // Subgraph URL auto-defaults from DEFAULT_SUBGRAPH_URLS
 });
 ```
+
+### 1a. Initialize SDK with RPC Indexer (Optional Alternative)
+
+Use RPC indexer for direct on-chain queries or chains without subgraph:
+
+```typescript
+import { SDK } from 'agent0-sdk';
+
+// RPC Indexer: Works with Alchemy, Infura, QuickNode, or any RPC
+const sdk = new SDK({
+  chainId: 42161, // Arbitrum One
+  rpcUrl: 'https://arb-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY',
+  privateKey: process.env.PRIVATE_KEY,
+  indexer: 'rpc', // 🔧 Use RPC indexer instead of subgraph
+  rpcIndexerFromBlock: 150_000_000n, // ⚠️ IMPORTANT: Set to contract deployment block
+});
+
+// ✅ Feedback operations work perfectly
+const feedbacks = await sdk.searchFeedback({ agents: ['42161:123'] });
+
+// ✅ Get single agent by ID works
+const agent = await sdk.getAgent('42161:123');
+
+// ❌ Agent search not supported (requires subgraph for rich filtering)
+// await sdk.searchAgents({ name: 'MyAgent' }); // Throws error
+```
+
+**RPC Indexer Capabilities:**
+- ✅ Full feedback operations (`searchFeedback`, `giveFeedback`, `getFeedback`)
+- ✅ Get agent by ID (`getAgent`, `loadAgent`)
+- ✅ On-chain metadata queries
+- ❌ Agent discovery/search (use subgraph for this)
+- 📖 See `docs/RPC_INDEXER_LIMITATIONS.md` for details
+
+**When to use RPC Indexer:**
+- Real-time feedback data (subgraph has ~30s indexing delay)
+- Local/private chains without subgraph deployment
+- Testing or development environments
+- You only need feedback operations, not agent search
 
 ### 1b. Initialize SDK (browser-side with ERC-6963 wallets)
 
@@ -296,15 +363,19 @@ await regTx.waitConfirmed();
 
 ## Multi-Chain Support
 
-The SDK supports querying agents across multiple blockchain networks:
+The SDK supports **7 blockchain networks** with cross-chain agent discovery and reputation:
 
-- **Ethereum Mainnet** (Chain ID: `1`)
-- **Base Mainnet** (Chain ID: `8453`)
-- **Polygon Mainnet** (Chain ID: `137`)
-- **Arbitrum One** (Chain ID: `42161`)
-- **Ethereum Sepolia** (Chain ID: `11155111`)
-- **Base Sepolia** (Chain ID: `84532`)
-- **Arbitrum Sepolia** (Chain ID: `421614`)
+| Network | Chain ID | Status | Indexing |
+|---------|----------|--------|----------|
+| **Ethereum Mainnet** | `1` | ✅ Full Support | Subgraph + RPC |
+| **Arbitrum One** | `42161` | ✅ Full Support | Subgraph + RPC |
+| **Base Mainnet** | `8453` | ✅ Full Support | Subgraph + RPC |
+| **Polygon Mainnet** | `137` | ✅ Full Support | Subgraph + RPC |
+| **Ethereum Sepolia** | `11155111` | ✅ Full Support | Subgraph + RPC |
+| **Arbitrum Sepolia** | `421614` | ✅ Full Support | Subgraph + RPC |
+| **Base Sepolia** | `84532` | ✅ Full Support | Subgraph + RPC |
+
+**Note:** All networks support both The Graph subgraph (default) and RPC indexer. Use `indexer: 'rpc'` for direct on-chain queries without subgraph dependency.
 
 ### Chain-Agnostic Agent IDs
 
@@ -312,15 +383,48 @@ Use `chainId:agentId` format to specify which chain an agent is on:
 
 ```typescript
 // Get agent from specific chain
-const agent = await sdk.getAgent('1:1234');  // Ethereum Mainnet
+const agent = await sdk.getAgent('1:1234');      // Ethereum Mainnet
+const arbAgent = await sdk.getAgent('42161:456'); // Arbitrum One
 
 // Search feedback for agent on specific chain
-const feedbacks = await sdk.searchFeedback({ agentId: '1:1234' });  // Ethereum Mainnet
-const feedbacksDefault = await sdk.searchFeedback({ agentId: '11155111:1234' });  // Default chain
+const feedbacks = await sdk.searchFeedback({ agentId: '1:1234' });
+const arbFeedbacks = await sdk.searchFeedback({ agentId: '42161:456' });
 
 // Get reputation summary for agent on specific chain
 const summary = await sdk.getReputationSummary('1:1234');  // Ethereum Mainnet
-const summaryDefault = await sdk.getReputationSummary('1234');  // Uses default chain
+const arbSummary = await sdk.getReputationSummary('42161:456');  // Arbitrum One
+```
+
+### Using Arbitrum Networks
+
+Arbitrum One and Arbitrum Sepolia are fully supported with both subgraph and RPC indexing:
+
+```typescript
+// Arbitrum One with subgraph (default, recommended)
+const arbSDK = new SDK({
+  chainId: 42161,
+  rpcUrl: 'https://arb-mainnet.g.alchemy.com/v2/YOUR_KEY',
+  privateKey: process.env.PRIVATE_KEY,
+  // Subgraph URL auto-defaults for chain 42161
+});
+
+// All operations work: agent search, feedback, reputation
+const agents = await arbSDK.searchAgents({ active: true });
+const feedbacks = await arbSDK.searchFeedback({ agents: ['42161:123'] });
+await arbSDK.giveFeedback('42161:123', 5.0, 'Excellent service', ['quality', 'speed']);
+
+// Alternative: Use RPC indexer for real-time data (optional)
+const arbRpcSDK = new SDK({
+  chainId: 42161,
+  rpcUrl: 'https://arb-mainnet.g.alchemy.com/v2/YOUR_KEY',
+  privateKey: process.env.PRIVATE_KEY,
+  indexer: 'rpc', // Direct on-chain queries
+  rpcIndexerFromBlock: 150_000_000n,
+});
+
+// RPC indexer: feedback operations work, agent search requires subgraph
+const agent = await arbRpcSDK.getAgent('42161:123');
+console.log(`Agent: ${agent.name}, Owner: ${agent.owners[0]}`);
 ```
 
 ### Multi-Chain Search
