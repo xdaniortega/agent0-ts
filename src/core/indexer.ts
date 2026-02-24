@@ -5,6 +5,7 @@
 
 import type { AgentSummary, SearchFilters, SearchOptions } from '../models/interfaces.js';
 import type { AgentId, ChainId } from '../models/types.js';
+import type { DataSourceClient } from './data-source-client.js';
 import { SubgraphClient } from './subgraph-client.js';
 import { SemanticSearchClient } from './semantic-search-client.js';
 import { normalizeAddress } from '../utils/validation.js';
@@ -27,7 +28,7 @@ export class AgentIndexer {
   private static readonly BATCH_SIZE = 1000;
 
   constructor(
-    private subgraphClient?: SubgraphClient,
+    private subgraphClient?: DataSourceClient,
     private subgraphUrlOverrides?: Record<ChainId, string>,
     private readonly defaultChainId?: ChainId
   ) {}
@@ -101,7 +102,7 @@ export class AgentIndexer {
   // Pagination removed: cursor helpers deleted.
 
   private async _fetchAllAgentsV2(
-    client: SubgraphClient,
+    client: DataSourceClient,
     where: Record<string, unknown>,
     orderBy: string,
     orderDirection: 'asc' | 'desc'

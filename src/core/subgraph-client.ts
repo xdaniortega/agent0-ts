@@ -5,6 +5,7 @@
 import { GraphQLClient } from 'graphql-request';
 import type { AgentSummary, SearchFilters } from '../models/interfaces.js';
 import { normalizeAddress } from '../utils/validation.js';
+import type { DataSourceClient } from './data-source-client.js';
 
 export interface SubgraphQueryOptions {
   where?: Record<string, unknown>;
@@ -97,7 +98,7 @@ export type AgentRegistrationFile = {
 /**
  * Client for querying the subgraph GraphQL API
  */
-export class SubgraphClient {
+export class SubgraphClient implements DataSourceClient {
   private client: GraphQLClient;
 
   constructor(subgraphUrl: string) {

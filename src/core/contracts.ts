@@ -494,6 +494,12 @@ export const DEFAULT_REGISTRIES: Record<ChainId, Record<string, string>> = {
     REPUTATION: '0x8004BAa17C55a88189AE136b182e5fdA19dE9b63',
     // VALIDATION: indexing currently disabled in subgraph; set when deployed/enabled
   },
+  42161: {
+    // Arbitrum One
+    IDENTITY: '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432',
+    REPUTATION: '0x8004BAa17C55a88189AE136b182e5fdA19dE9b63',
+    // VALIDATION: indexing currently disabled in subgraph; set when deployed/enabled
+  },
   11155111: {
     // Ethereum Sepolia
     // Aligned with Python SDK (agent0-py) defaults
