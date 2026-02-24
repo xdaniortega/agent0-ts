@@ -514,12 +514,6 @@ export const DEFAULT_REGISTRIES: Record<ChainId, Record<string, string>> = {
     REPUTATION: '0x8004B663056A597Dffe9eCcC1965A193B7388713',
     // VALIDATION: not deployed in defaults yet
   },
-  42161: {
-    // Arbitrum Mainnet
-    IDENTITY: '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432',
-    REPUTATION: '0x8004BAa17C55a88189AE136b182e5fdA19dE9b63',
-    // VALIDATION: indexing currently disabled in subgraph; set when deployed/enabled
-  },
   421614: {
     // Arbitrum Sepolia
     IDENTITY: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
